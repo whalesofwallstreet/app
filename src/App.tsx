@@ -1,13 +1,13 @@
 import React from 'react';
 import Navbar from './components/Navbar';
+import Hero from './components/Hero';
 
 function App() {
   return (
     <>
       <Navbar />
-      <main style={{ padding: '4rem 2rem', textAlign: 'center' }}>
-        <h2>WOW. Landing Page Under Development</h2>
-        <p>Building the next-gen Stellar anchor interface...</p>
+      <main>
+        <Hero />
       </main>
     </>
   );
