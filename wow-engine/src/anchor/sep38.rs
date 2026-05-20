@@ -31,7 +31,8 @@ impl Sep38Client {
         };
 
         // Formulate standard ISO-8601 UTC date string
-        let expires_at = "2026-05-18T13:50:00Z".to_string();
+        let expires_at = (chrono::Utc::now() + chrono::Duration::minutes(15))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
         Ok(Sep38Quote {
             id: quote_id,
