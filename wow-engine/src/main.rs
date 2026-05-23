@@ -3,12 +3,19 @@ use std::net::SocketAddr;
 
 #[tokio::main]
 async fn main() {
+    // Load environment variables from .env file
+    dotenvy::dotenv().ok();
+
     // 1. Initialize API router with CORS enabled for seamless frontend calls
     let app = wow_engine::api::create_router()
         .layer(CorsLayer::permissive());
 
-    // 2. Bind TCP listener on port 8080
-    let addr = SocketAddr::from(([127, 0, 0, 1], 8080));
+    // 2. Bind TCP listener on configured port or fallback to 8080
+    let port: u16 = std::env::var("PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(8080);
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = tokio::net::TcpListener::bind(addr).await.expect("Failed to bind to socket address");
     
     println!("Wow Engine is booting up and routing pipeline conversions...");
