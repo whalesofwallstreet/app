@@ -283,3 +283,15 @@ button {
     font-size: 0.95rem;
   }
 }
+
+@media (max-width: 480px) {
+  .feature-card {
+    padding: 1.75rem 1.25rem;
+  }
+  .container {
+    padding: 0 1rem;
+  }
+  .section-title {
+    font-size: 1.75rem;
+  }
+}
