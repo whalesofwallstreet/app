@@ -103,7 +103,7 @@ export default function AnchorSimulator() {
               type="text" 
               value={anchorDomain} 
               onChange={(e) => setAnchorDomain(e.target.value)}
-              style={{ width: '100%', padding: '0.8rem', borderRadius: '0.5rem', border: '1px solid var(--glass-border)', background: 'var(--white)' }}
+              className="glass-input"
             />
           </div>
           <div>
@@ -112,7 +112,7 @@ export default function AnchorSimulator() {
               type="text" 
               value={assetCode} 
               onChange={(e) => setAssetCode(e.target.value)}
-              style={{ width: '100%', padding: '0.8rem', borderRadius: '0.5rem', border: '1px solid var(--glass-border)', background: 'var(--white)' }}
+              className="glass-input"
             />
           </div>
           <div>
@@ -121,7 +121,7 @@ export default function AnchorSimulator() {
               type="text" 
               value={account} 
               onChange={(e) => setAccount(e.target.value)}
-              style={{ width: '100%', padding: '0.8rem', borderRadius: '0.5rem', border: '1px solid var(--glass-border)', background: 'var(--white)' }}
+              className="glass-input"
             />
           </div>
           <button 

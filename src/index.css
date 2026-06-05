@@ -295,3 +295,23 @@ button {
     font-size: 1.75rem;
   }
 }
+
+.glass-input {
+  width: 100%;
+  padding: 0.8rem 1.2rem;
+  border-radius: 0.75rem;
+  border: 1px solid var(--glass-border);
+  background: rgba(255, 255, 255, 0.5);
+  color: var(--text-dark);
+  font-family: inherit;
+  font-size: 1rem;
+  font-weight: 500;
+  outline: none;
+  transition: var(--transition);
+}
+
+.glass-input:focus {
+  background: var(--white);
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 4px rgba(43, 43, 145, 0.15);
+}

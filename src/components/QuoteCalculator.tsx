@@ -63,7 +63,7 @@ export default function QuoteCalculator() {
             <select 
               value={sourceChain} 
               onChange={(e) => setSourceChain(e.target.value)}
-              style={{ width: '100%', padding: '0.8rem', borderRadius: '0.5rem', border: '1px solid var(--glass-border)', background: 'var(--white)' }}
+              className="glass-input"
             >
               <option value="Ethereum">Ethereum</option>
               <option value="Arbitrum">Arbitrum</option>
@@ -76,7 +76,7 @@ export default function QuoteCalculator() {
             <select 
               value={destChain} 
               onChange={(e) => setDestChain(e.target.value)}
-              style={{ width: '100%', padding: '0.8rem', borderRadius: '0.5rem', border: '1px solid var(--glass-border)', background: 'var(--white)' }}
+              className="glass-input"
             >
               <option value="Ethereum">Ethereum</option>
               <option value="Arbitrum">Arbitrum</option>
@@ -90,7 +90,7 @@ export default function QuoteCalculator() {
               type="text" 
               value={sourceAsset} 
               onChange={(e) => setSourceAsset(e.target.value)}
-              style={{ width: '100%', padding: '0.8rem', borderRadius: '0.5rem', border: '1px solid var(--glass-border)', background: 'var(--white)' }}
+              className="glass-input"
             />
           </div>
           <div>
@@ -99,7 +99,7 @@ export default function QuoteCalculator() {
               type="text" 
               value={destAsset} 
               onChange={(e) => setDestAsset(e.target.value)}
-              style={{ width: '100%', padding: '0.8rem', borderRadius: '0.5rem', border: '1px solid var(--glass-border)', background: 'var(--white)' }}
+              className="glass-input"
             />
           </div>
           <div style={{ gridColumn: 'span 2' }}>
@@ -108,7 +108,7 @@ export default function QuoteCalculator() {
               type="number" 
               value={amountIn} 
               onChange={(e) => setAmountIn(e.target.value)}
-              style={{ width: '100%', padding: '0.8rem', borderRadius: '0.5rem', border: '1px solid var(--glass-border)', background: 'var(--white)' }}
+              className="glass-input"
             />
           </div>
           <button 
