@@ -30,8 +30,8 @@ function App() {
       <main style={{ position: 'relative', zIndex: 1 }}>
         <Hero />
         <Features />
-        <QuoteCalculator />
-        <AnchorSimulator />
+        {/*<QuoteCalculator />*/}
+        {/*<AnchorSimulator />*/}
         <Testimonials />
       </main>
       <Footer />
