@@ -127,4 +127,50 @@ mod tests {
         assert_eq!(routes[0].provider, "deBridge DLN");
         assert_eq!(routes[0].amount_out, 9990);
     }
+
+    #[tokio::test]
+    async fn test_routes_sorting_by_amount_out_and_fee() {
+        // Prepare dummy route options to test sorting logic
+        let mut routes = vec![
+            RouteOption {
+                provider: "Provider B".to_string(),
+                path: "A -> B".to_string(),
+                amount_in: 100,
+                amount_out: 95,
+                estimated_fee_usd: 1.50,
+                duration_seconds: 60,
+                execution_payload: None,
+            },
+            RouteOption {
+                provider: "Provider A".to_string(),
+                path: "A -> B".to_string(),
+                amount_in: 100,
+                amount_out: 98,
+                estimated_fee_usd: 2.00,
+                duration_seconds: 60,
+                execution_payload: None,
+            },
+            RouteOption {
+                provider: "Provider C (Tiebreaker)".to_string(),
+                path: "A -> B".to_string(),
+                amount_in: 100,
+                amount_out: 98,
+                estimated_fee_usd: 0.50, // lowest fee should tiebreak and win first place
+                duration_seconds: 30,
+                execution_payload: None,
+            },
+        ];
+
+        // Apply sorting key mechanism used in find_best_route
+        routes.sort_by_key(|r| {
+            (
+                std::cmp::Reverse(r.amount_out),
+                (r.estimated_fee_usd * 100.0) as u64,
+            )
+        });
+
+        assert_eq!(routes[0].provider, "Provider C (Tiebreaker)");
+        assert_eq!(routes[1].provider, "Provider A");
+        assert_eq!(routes[2].provider, "Provider B");
+    }
 }
