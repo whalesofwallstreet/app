@@ -42,7 +42,7 @@ impl Sep24Client {
         asset_code: &str,
         account: &str,
     ) -> Result<Sep24InteractiveResponse, anyhow::Error> {
-        let tx_id = format!("tx_sep24_{}", super::uuid_fast());
+        let tx_id = format!("tx_sep24_{}", super::generate_uuid());
 
         super::tracker::insert_transaction(super::tracker::Transaction {
             id: tx_id.clone(),

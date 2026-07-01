@@ -4,15 +4,10 @@ pub mod tracker;
 
 use serde::{Deserialize, Serialize};
 
-/// Generates a compact, unique hex ID from the current nanosecond timestamp.
+/// Generates a unique standard UUID v4.
 /// Used across SEP-24 and SEP-38 flows to assign transaction and quote IDs.
-pub(super) fn uuid_fast() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let start = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    format!("{:x}", start & 0xFFFFFFFFFFFFFFF)
+pub(super) fn generate_uuid() -> String {
+    uuid::Uuid::new_v4().to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

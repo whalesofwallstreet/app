@@ -41,7 +41,7 @@ impl Sep38Client {
         sell_amount: f64,
         expiration_minutes: i64,
     ) -> Result<Sep38Quote, anyhow::Error> {
-        let quote_id = format!("q_sep38_{}", uuid_fast());
+        let quote_id = format!("q_sep38_{}", super::generate_uuid());
         
         let (price, buy_amount) = match buy_asset {
             b if b.contains("NGN") => (1450.0, sell_amount * 1450.0),
