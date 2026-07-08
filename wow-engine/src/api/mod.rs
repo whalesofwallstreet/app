@@ -1,11 +1,12 @@
 use axum::{
     routing::{get, post},
-    Router, Json, http::StatusCode,
+    Router, Json,
 };
 use serde::{Deserialize, Serialize};
 use crate::bridge::Chain;
 use crate::router::{RoutePlanner, RouteOption};
 use crate::anchor::{sep24::Sep24Client, sep38::Sep38Client, Sep24InteractiveResponse, Sep38Quote};
+use crate::error::AppError;
 
 pub mod validation;
 use validation::{validate_stellar_address, validate_asset_code};
@@ -55,26 +56,7 @@ pub struct HealthResponse {
     pub timestamp: String,
 }
 
-#[derive(Serialize)]
-pub struct ErrorResponse {
-    pub error: String,
-}
 
-pub enum AppError {
-    BadRequest(String),
-    Internal(String),
-}
-
-impl axum::response::IntoResponse for AppError {
-    fn into_response(self) -> axum::response::Response {
-        let (status, err_msg) = match self {
-            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
-            AppError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
-        };
-        let body = Json(ErrorResponse { error: err_msg });
-        (status, body).into_response()
-    }
-}
 
 pub fn create_router() -> Router {
     Router::new()
@@ -109,16 +91,14 @@ async fn quote_handler(
     }
 
     let planner = RoutePlanner::new();
-    match planner.find_best_route(
+    let routes = planner.find_best_route(
         payload.source_chain,
         payload.dest_chain,
         &payload.source_asset,
         &payload.dest_asset,
         payload.amount_in,
-    ).await {
-        Ok(routes) => Ok(Json(QuoteResponse { routes })),
-        Err(e) => Err(AppError::Internal(e.to_string())),
-    }
+    ).await?;
+    Ok(Json(QuoteResponse { routes }))
 }
 
 async fn deposit_handler(
@@ -135,14 +115,12 @@ async fn deposit_handler(
     }
 
     let client = Sep24Client::new();
-    match client.initiate_deposit(
+    let tx = client.initiate_deposit(
         &payload.anchor_domain,
         &payload.asset_code,
         &payload.account,
-    ).await {
-        Ok(tx) => Ok(Json(tx)),
-        Err(e) => Err(AppError::Internal(e.to_string())),
-    }
+    ).await?;
+    Ok(Json(tx))
 }
 
 async fn withdraw_handler(
@@ -159,14 +137,12 @@ async fn withdraw_handler(
     }
 
     let client = Sep24Client::new();
-    match client.initiate_withdrawal(
+    let tx = client.initiate_withdrawal(
         &payload.anchor_domain,
         &payload.asset_code,
         &payload.account,
-    ).await {
-        Ok(tx) => Ok(Json(tx)),
-        Err(e) => Err(AppError::Internal(e.to_string())),
-    }
+    ).await?;
+    Ok(Json(tx))
 }
 
 async fn anchor_quote_handler(
@@ -186,15 +162,13 @@ async fn anchor_quote_handler(
     }
 
     let client = Sep38Client::new();
-    match client.get_indicative_quote(
+    let quote = client.get_indicative_quote(
         &payload.anchor_domain,
         &payload.sell_asset,
         &payload.buy_asset,
         payload.sell_amount,
-    ).await {
-        Ok(quote) => Ok(Json(quote)),
-        Err(e) => Err(AppError::Internal(e.to_string())),
-    }
+    ).await?;
+    Ok(Json(quote))
 }
 
 #[cfg(test)]
