@@ -13,6 +13,7 @@ impl Sep38Client {
         }
     }
 
+    #[tracing::instrument(skip(self), err)]
     pub async fn get_indicative_quote(
         &self,
         _anchor_domain: &str,
@@ -23,6 +24,7 @@ impl Sep38Client {
         self.generate_quote(_anchor_domain, sell_asset, buy_asset, sell_amount, 15)
     }
 
+    #[tracing::instrument(skip(self), err)]
     pub async fn get_firm_quote(
         &self,
         _anchor_domain: &str,
@@ -33,6 +35,7 @@ impl Sep38Client {
         self.generate_quote(_anchor_domain, sell_asset, buy_asset, sell_amount, 5) // Firm quotes expire faster
     }
 
+    #[tracing::instrument(skip(self), err)]
     fn generate_quote(
         &self,
         _anchor_domain: &str,

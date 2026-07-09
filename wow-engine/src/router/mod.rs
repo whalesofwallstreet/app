@@ -25,6 +25,7 @@ impl RoutePlanner {
         }
     }
 
+    #[tracing::instrument(skip(self), err)]
     pub async fn find_best_route(
         &self,
         source_chain: Chain,

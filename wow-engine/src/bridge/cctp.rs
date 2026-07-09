@@ -25,6 +25,7 @@ impl BridgeProvider for CctpClient {
         "Circle CCTP"
     }
 
+    #[tracing::instrument(skip(self), err)]
     async fn get_quote(
         &self,
         source_chain: Chain,

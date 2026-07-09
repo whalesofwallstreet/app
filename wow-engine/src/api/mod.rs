@@ -12,7 +12,7 @@ pub mod validation;
 use validation::{validate_stellar_address, validate_asset_code};
 
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 pub struct QuoteRequest {
     pub source_chain: Chain,
     pub dest_chain: Chain,
@@ -26,21 +26,21 @@ pub struct QuoteResponse {
     pub routes: Vec<RouteOption>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 pub struct DepositRequest {
     pub anchor_domain: String,
     pub asset_code: String,
     pub account: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 pub struct WithdrawRequest {
     pub anchor_domain: String,
     pub asset_code: String,
     pub account: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 pub struct AnchorQuoteRequest {
     pub anchor_domain: String,
     pub sell_asset: String,
@@ -77,6 +77,7 @@ async fn health_handler() -> Json<HealthResponse> {
     })
 }
 
+#[tracing::instrument(err)]
 async fn quote_handler(
     Json(payload): Json<QuoteRequest>,
 ) -> Result<Json<QuoteResponse>, AppError> {
@@ -101,6 +102,7 @@ async fn quote_handler(
     Ok(Json(QuoteResponse { routes }))
 }
 
+#[tracing::instrument(err)]
 async fn deposit_handler(
     Json(payload): Json<DepositRequest>,
 ) -> Result<Json<Sep24InteractiveResponse>, AppError> {
@@ -123,6 +125,7 @@ async fn deposit_handler(
     Ok(Json(tx))
 }
 
+#[tracing::instrument(err)]
 async fn withdraw_handler(
     Json(payload): Json<WithdrawRequest>,
 ) -> Result<Json<Sep24InteractiveResponse>, AppError> {
@@ -145,6 +148,7 @@ async fn withdraw_handler(
     Ok(Json(tx))
 }
 
+#[tracing::instrument(err)]
 async fn anchor_quote_handler(
     Json(payload): Json<AnchorQuoteRequest>,
 ) -> Result<Json<Sep38Quote>, AppError> {

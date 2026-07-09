@@ -13,6 +13,7 @@ impl Sep24Client {
         }
     }
 
+    #[tracing::instrument(skip(self), err)]
     pub async fn initiate_deposit(
         &self,
         anchor_domain: &str,
@@ -22,6 +23,7 @@ impl Sep24Client {
         self.initiate_flow("deposit", anchor_domain, asset_code, account)
     }
 
+    #[tracing::instrument(skip(self), err)]
     pub async fn initiate_withdrawal(
         &self,
         anchor_domain: &str,
@@ -35,6 +37,7 @@ impl Sep24Client {
     ///
     /// Generates a transaction ID, stores the pending transaction in the global
     /// tracker, and constructs the SEP-24 interactive redirect URL for the client.
+    #[tracing::instrument(skip(self), err)]
     fn initiate_flow(
         &self,
         kind: &str,
