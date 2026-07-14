@@ -21,6 +21,7 @@ reqwest-retry = "0.9.1"
 retry-policies = "0.5.2"
 tracing = "0.1.44"
 envy = "0.4.2"
+moka = { version = "0.12.15", features = ["future"] }
 
 [dev-dependencies]
 axum-test = "16"

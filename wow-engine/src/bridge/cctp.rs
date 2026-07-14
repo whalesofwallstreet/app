@@ -1,22 +1,20 @@
 use crate::bridge::{BridgeProvider, BridgeQuote, Chain};
 use reqwest_middleware::ClientWithMiddleware;
+use std::sync::Arc;
+use crate::bridge::gas_oracle::GasOracle;
 
 pub struct CctpClient {
     #[allow(dead_code)]
     client: ClientWithMiddleware,
+    oracle: Arc<GasOracle>,
 }
 
 impl CctpClient {
-    pub fn new() -> Self {
+    pub fn new(oracle: Arc<GasOracle>) -> Self {
         Self {
             client: crate::http_client::build_resilient_client().expect("Failed to build resilient HTTP client"),
+            oracle,
         }
-    }
-}
-
-impl Default for CctpClient {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -34,13 +32,7 @@ impl BridgeProvider for CctpClient {
         dest_asset: &str,
         amount_in: u64,
     ) -> Result<BridgeQuote, anyhow::Error> {
-        // Circle CCTP has no dynamic slippage, but requires source chain gas to trigger 'depositForBurn'
-        let estimated_fee_usd = match source_chain {
-            Chain::Ethereum => 15.00,
-            Chain::Arbitrum => 0.50,
-            Chain::Solana => 0.01,
-            Chain::Stellar => 0.005,
-        };
+        let estimated_fee_usd = self.oracle.estimate_gas_fee_usd(source_chain).await;
 
         // Circle CCTP burns 1:1, meaning amount_out is equal to amount_in (minus zero protocol fee)
         let amount_out = amount_in;

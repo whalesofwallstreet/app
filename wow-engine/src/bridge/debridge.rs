@@ -1,22 +1,20 @@
 use crate::bridge::{BridgeProvider, BridgeQuote, Chain};
 use reqwest_middleware::ClientWithMiddleware;
+use std::sync::Arc;
+use crate::bridge::gas_oracle::GasOracle;
 
 pub struct DeBridgeClient {
     #[allow(dead_code)]
     client: ClientWithMiddleware,
+    oracle: Arc<GasOracle>,
 }
 
 impl DeBridgeClient {
-    pub fn new() -> Self {
+    pub fn new(oracle: Arc<GasOracle>) -> Self {
         Self {
             client: crate::http_client::build_resilient_client().expect("Failed to build resilient HTTP client"),
+            oracle,
         }
-    }
-}
-
-impl Default for DeBridgeClient {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -34,13 +32,7 @@ impl BridgeProvider for DeBridgeClient {
         dest_asset: &str,
         amount_in: u64,
     ) -> Result<BridgeQuote, anyhow::Error> {
-        // Model a realistic deBridge gas estimation per network
-        let estimated_fee_usd = match source_chain {
-            Chain::Ethereum => 12.50,
-            Chain::Arbitrum => 0.85,
-            Chain::Solana => 0.05,
-            Chain::Stellar => 0.01,
-        };
+        let estimated_fee_usd = self.oracle.estimate_gas_fee_usd(source_chain).await;
 
         // deBridge protocol fee is 0.1% of the input value
         let protocol_fee = (amount_in as f64 * 0.001) as u64;

@@ -1,6 +1,6 @@
 pub mod dex;
 
-use crate::bridge::{Chain, debridge::DeBridgeClient, cctp::CctpClient, BridgeProvider};
+use crate::bridge::{Chain, debridge::DeBridgeClient, cctp::CctpClient, BridgeProvider, gas_oracle::GasOracle};
 use crate::router::dex::DexProvider;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -67,9 +67,10 @@ fn get_usd_value(asset: &str, amount: u64) -> f64 {
 
 impl RoutePlanner {
     pub fn new() -> Self {
+        let oracle = Arc::new(GasOracle::new());
         Self {
-            debridge: DeBridgeClient::new(),
-            cctp: CctpClient::new(),
+            debridge: DeBridgeClient::new(oracle.clone()),
+            cctp: CctpClient::new(oracle),
         }
     }
 
