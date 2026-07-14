@@ -1,5 +1,5 @@
 import { useTheme } from "../ThemeContext";
-import { useAppNavigation, type ScreenName } from "../context/NavigationContext";
+import { useAppNavigation } from "../context/NavigationContext";
 import { fonts, shadows } from "../theme";
 import { currentUser as initialUser } from "../data/mockData";
 import { Ionicons } from "../components/Ionicons";

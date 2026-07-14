@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useTheme } from "../ThemeContext";
 import { useAppNavigation } from "../context/NavigationContext";
 import { Ionicons } from "../components/Ionicons";
-import { fonts, shadows } from "../theme";
+import { fonts } from "../theme";
 import { useWallet } from "../context/WalletContext";
 
 export const WithdrawScreen = () => {
@@ -35,7 +35,7 @@ export const WithdrawScreen = () => {
     <div className="fade-in" style={{ maxWidth: "600px", margin: "0 auto" }}>
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "32px" }}>
-        <button onClick={goBack} style={{ padding: "8px", borderRadius: "12px", display: "flex", alignItems: "center", justifyContext: "center" }}>
+        <button onClick={goBack} style={{ padding: "8px", borderRadius: "12px", display: "flex", alignItems: "center", justifyContent: "center" }}>
           <Ionicons name="chevron-back" size={24} color={c.foreground} />
         </button>
         <span style={{ fontSize: "22px", fontWeight: "800", color: c.foreground, fontFamily: fonts.display, letterSpacing: "-0.5px" }}>Withdraw Money</span>
@@ -62,7 +62,7 @@ export const WithdrawScreen = () => {
               cursor: "pointer",
             }}
           >
-            <div style={{ width: "48px", height: "48px", borderRadius: "16px", backgroundColor: selected === bank.id ? `${c.primary}1A` : c.secondary, display: "flex", alignItems: "center", justifyContext: "center" }}>
+            <div style={{ width: "48px", height: "48px", borderRadius: "16px", backgroundColor: selected === bank.id ? `${c.primary}1A` : c.secondary, display: "flex", alignItems: "center", justifyContent: "center" }}>
               <Ionicons name="business-outline" size={22} color={selected === bank.id ? c.primary : c.foreground} />
             </div>
             <div style={{ flex: 1 }}>
@@ -77,7 +77,7 @@ export const WithdrawScreen = () => {
                 border: `2px solid ${selected === bank.id ? c.primary : c.mutedForeground}`,
                 display: "flex",
                 alignItems: "center",
-                justifyContext: "center",
+                justifyContent: "center",
               }}
             >
               {selected === bank.id && (

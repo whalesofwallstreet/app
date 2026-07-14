@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { colors } from "./theme";
+import { ThemeProvider as StyledThemeProvider } from "styled-components";
 
 type Theme = "light" | "dark";
 
@@ -43,7 +44,9 @@ export const ThemeProvider = ({ children }: { children: React.ReactNode }) => {
 
   return (
     <ThemeContext.Provider value={{ theme, setTheme, c }}>
-      {children}
+      <StyledThemeProvider theme={{ colors: c }}>
+        {children}
+      </StyledThemeProvider>
     </ThemeContext.Provider>
   );
 };

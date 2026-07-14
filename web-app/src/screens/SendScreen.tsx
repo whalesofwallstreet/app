@@ -2,7 +2,7 @@ import { useState, useMemo } from "react";
 import { useTheme } from "../ThemeContext";
 import { useAppNavigation } from "../context/NavigationContext";
 import { fonts } from "../theme";
-import { contacts, type Transaction } from "../data/mockData";
+import { contacts } from "../data/mockData";
 import { Ionicons } from "../components/Ionicons";
 import { useWallet } from "../context/WalletContext";
 

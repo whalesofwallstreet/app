@@ -17,7 +17,7 @@ export const SaveScreen = () => {
     <div className="fade-in" style={{ maxWidth: "700px", margin: "0 auto" }}>
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "32px" }}>
-        <button onClick={goBack} style={{ padding: "8px", borderRadius: "12px", display: "flex", alignItems: "center", justifyContext: "center" }}>
+        <button onClick={goBack} style={{ padding: "8px", borderRadius: "12px", display: "flex", alignItems: "center", justifyContent: "center" }}>
           <Ionicons name="chevron-back" size={24} color={c.foreground} />
         </button>
         <span style={{ fontSize: "22px", fontWeight: "800", color: c.foreground, fontFamily: fonts.display, letterSpacing: "-0.5px" }}>Savings Growth Hub</span>
@@ -34,7 +34,7 @@ export const SaveScreen = () => {
           style={{ display: "flex", alignItems: "center", gap: "20px", padding: "20px 24px", borderRadius: "24px", backgroundColor: c.card, border: `1px solid ${c.border}50`, marginBottom: "16px", cursor: "pointer", boxShadow: shadows.card }}
           className="tx-item-hover"
         >
-          <div style={{ width: "52px", height: "52px", borderRadius: "18px", backgroundColor: `${c.primary}12`, display: "flex", alignItems: "center", justifyContext: "center" }}>
+          <div style={{ width: "52px", height: "52px", borderRadius: "18px", backgroundColor: `${c.primary}12`, display: "flex", alignItems: "center", justifyContent: "center" }}>
             <Ionicons name={opt.icon} size={24} color={c.primary} />
           </div>
           <div style={{ flex: 1 }}>
