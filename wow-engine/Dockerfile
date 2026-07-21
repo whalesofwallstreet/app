@@ -11,10 +11,10 @@ RUN apt-get update \
     && apt-get install --no-install-recommends --yes binutils ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the complete build context so a future `.sqlx` offline query cache is
-# available to compile-time SQLx checks. Only the release binary crosses into
-# the runtime stage.
-COPY . .
+# Copy dependency manifests and source from the `wow-engine` build context.
+# Keeping the manifests separate also allows Docker to cache dependency builds.
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
 
 RUN cargo build --locked --release \
     && strip target/release/wow-engine
