@@ -1,5 +1,4 @@
 use crate::anchor::{sep24::Sep24Client, sep38::Sep38Client, Sep24InteractiveResponse, Sep38Quote};
-use crate::bridge::Chain;
 use crate::db::models::RouteExecutionInput;
 use crate::db::service::{ExecuteRouteResult, RouteExecutionService};
 use crate::db::Database;
@@ -9,62 +8,19 @@ use axum::{
     routing::{get, post},
     Extension, Json, Router,
 };
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+use serde::Serialize;
 
+pub mod validated_request;
 pub mod validation;
-use validation::{validate_asset_code, validate_stellar_address};
 
-#[derive(Deserialize, Debug)]
-pub struct QuoteRequest {
-    pub source_chain: Chain,
-    pub dest_chain: Chain,
-    pub source_asset: String,
-    pub dest_asset: String,
-    pub amount_in: u64,
-}
+use validated_request::{
+    ValidatedAnchorQuoteRequest, ValidatedDepositRequest, ValidatedExecuteRouteRequest,
+    ValidatedQuoteRequest, ValidatedWithdrawRequest,
+};
 
 #[derive(Serialize)]
 pub struct QuoteResponse {
     pub routes: Vec<RouteOption>,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct DepositRequest {
-    pub anchor_domain: String,
-    pub asset_code: String,
-    pub account: String,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct WithdrawRequest {
-    pub anchor_domain: String,
-    pub asset_code: String,
-    pub account: String,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct AnchorQuoteRequest {
-    pub anchor_domain: String,
-    pub sell_asset: String,
-    pub buy_asset: String,
-    pub sell_amount: f64,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct ExecuteRouteRequest {
-    pub user_id: Uuid,
-    pub source_chain: String,
-    pub dest_chain: String,
-    pub source_asset: String,
-    pub dest_asset: String,
-    pub amount_in: u64,
-    pub amount_out: u64,
-    pub provider: String,
-    pub path: String,
-    pub estimated_fee_usd: f64,
-    pub anchor_domain: Option<String>,
-    pub anchor_transaction_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -96,31 +52,23 @@ async fn health_handler() -> Json<HealthResponse> {
 }
 
 #[tracing::instrument(err)]
-async fn quote_handler(Json(payload): Json<QuoteRequest>) -> Result<Json<QuoteResponse>, AppError> {
-    if payload.source_asset.trim().is_empty() {
-        return Err(AppError::BadRequest(
-            "Source asset cannot be empty".to_string(),
-        ));
-    }
-    if payload.dest_asset.trim().is_empty() {
-        return Err(AppError::BadRequest(
-            "Destination asset cannot be empty".to_string(),
-        ));
-    }
-    if payload.amount_in == 0 {
-        return Err(AppError::BadRequest(
-            "Amount in must be greater than zero".to_string(),
-        ));
-    }
-
+async fn quote_handler(
+    ValidatedQuoteRequest {
+        source_chain,
+        dest_chain,
+        source_asset,
+        dest_asset,
+        amount_in,
+    }: ValidatedQuoteRequest,
+) -> Result<Json<QuoteResponse>, AppError> {
     let planner = RoutePlanner::new();
     let routes = planner
         .find_best_route(
-            payload.source_chain,
-            payload.dest_chain,
-            &payload.source_asset,
-            &payload.dest_asset,
-            payload.amount_in,
+            source_chain,
+            dest_chain,
+            &source_asset,
+            &dest_asset,
+            amount_in,
         )
         .await?;
     Ok(Json(QuoteResponse { routes }))
@@ -128,93 +76,46 @@ async fn quote_handler(Json(payload): Json<QuoteRequest>) -> Result<Json<QuoteRe
 
 #[tracing::instrument(err)]
 async fn deposit_handler(
-    Json(payload): Json<DepositRequest>,
+    ValidatedDepositRequest {
+        anchor_domain,
+        asset_code,
+        account,
+    }: ValidatedDepositRequest,
 ) -> Result<Json<Sep24InteractiveResponse>, AppError> {
-    if let Err(err) = validate_stellar_address(&payload.account) {
-        return Err(AppError::BadRequest(format!(
-            "Invalid account address: {}",
-            err
-        )));
-    }
-    if let Err(err) = validate_asset_code(&payload.asset_code) {
-        return Err(AppError::BadRequest(format!("Invalid asset code: {}", err)));
-    }
-    if payload.anchor_domain.trim().is_empty() {
-        return Err(AppError::BadRequest(
-            "Anchor domain cannot be empty".to_string(),
-        ));
-    }
-
     let client = Sep24Client::new();
     let tx = client
-        .initiate_deposit(
-            &payload.anchor_domain,
-            &payload.asset_code,
-            &payload.account,
-        )
+        .initiate_deposit(&anchor_domain, &asset_code, &account)
         .await?;
     Ok(Json(tx))
 }
 
 #[tracing::instrument(err)]
 async fn withdraw_handler(
-    Json(payload): Json<WithdrawRequest>,
+    ValidatedWithdrawRequest {
+        anchor_domain,
+        asset_code,
+        account,
+    }: ValidatedWithdrawRequest,
 ) -> Result<Json<Sep24InteractiveResponse>, AppError> {
-    if let Err(err) = validate_stellar_address(&payload.account) {
-        return Err(AppError::BadRequest(format!(
-            "Invalid account address: {}",
-            err
-        )));
-    }
-    if let Err(err) = validate_asset_code(&payload.asset_code) {
-        return Err(AppError::BadRequest(format!("Invalid asset code: {}", err)));
-    }
-    if payload.anchor_domain.trim().is_empty() {
-        return Err(AppError::BadRequest(
-            "Anchor domain cannot be empty".to_string(),
-        ));
-    }
-
     let client = Sep24Client::new();
     let tx = client
-        .initiate_withdrawal(
-            &payload.anchor_domain,
-            &payload.asset_code,
-            &payload.account,
-        )
+        .initiate_withdrawal(&anchor_domain, &asset_code, &account)
         .await?;
     Ok(Json(tx))
 }
 
 #[tracing::instrument(err)]
 async fn anchor_quote_handler(
-    Json(payload): Json<AnchorQuoteRequest>,
+    ValidatedAnchorQuoteRequest {
+        anchor_domain,
+        sell_asset,
+        buy_asset,
+        sell_amount,
+    }: ValidatedAnchorQuoteRequest,
 ) -> Result<Json<Sep38Quote>, AppError> {
-    if let Err(err) = validate_asset_code(&payload.sell_asset) {
-        return Err(AppError::BadRequest(format!("Invalid sell asset: {}", err)));
-    }
-    if let Err(err) = validate_asset_code(&payload.buy_asset) {
-        return Err(AppError::BadRequest(format!("Invalid buy asset: {}", err)));
-    }
-    if payload.sell_amount <= 0.0 {
-        return Err(AppError::BadRequest(
-            "Sell amount must be greater than zero".to_string(),
-        ));
-    }
-    if payload.anchor_domain.trim().is_empty() {
-        return Err(AppError::BadRequest(
-            "Anchor domain cannot be empty".to_string(),
-        ));
-    }
-
     let client = Sep38Client::new();
     let quote = client
-        .get_indicative_quote(
-            &payload.anchor_domain,
-            &payload.sell_asset,
-            &payload.buy_asset,
-            payload.sell_amount,
-        )
+        .get_indicative_quote(&anchor_domain, &sell_asset, &buy_asset, sell_amount)
         .await?;
     Ok(Json(quote))
 }
@@ -222,7 +123,20 @@ async fn anchor_quote_handler(
 #[tracing::instrument(skip(db), err)]
 async fn execute_route_handler(
     Extension(db): Extension<Option<Database>>,
-    Json(payload): Json<ExecuteRouteRequest>,
+    ValidatedExecuteRouteRequest {
+        user_id,
+        source_chain,
+        dest_chain,
+        source_asset,
+        dest_asset,
+        amount_in,
+        amount_out,
+        provider,
+        path,
+        estimated_fee_usd,
+        anchor_domain,
+        anchor_transaction_id,
+    }: ValidatedExecuteRouteRequest,
 ) -> Result<Json<ExecuteRouteResult>, AppError> {
     let db = db.ok_or_else(|| {
         AppError::Internal(anyhow::anyhow!(
@@ -230,40 +144,24 @@ async fn execute_route_handler(
         ))
     })?;
 
-    if payload.amount_in == 0 {
-        return Err(AppError::BadRequest(
-            "Amount in must be greater than zero".to_string(),
-        ));
-    }
-    if payload.amount_out == 0 {
-        return Err(AppError::BadRequest(
-            "Amount out must be greater than zero".to_string(),
-        ));
-    }
-    if payload.estimated_fee_usd < 0.0 {
-        return Err(AppError::BadRequest(
-            "Estimated fee cannot be negative".to_string(),
-        ));
-    }
-
     let route_input = RouteExecutionInput {
-        user_id: payload.user_id,
-        source_chain: payload.source_chain,
-        dest_chain: payload.dest_chain,
-        source_asset: payload.source_asset,
-        dest_asset: payload.dest_asset,
-        amount_in: payload.amount_in as i64,
-        amount_out: payload.amount_out as i64,
-        provider: payload.provider,
-        path: payload.path,
-        estimated_fee_usd: payload.estimated_fee_usd,
+        user_id,
+        source_chain: source_chain.to_string(),
+        dest_chain: dest_chain.to_string(),
+        source_asset,
+        dest_asset,
+        amount_in: amount_in as i64,
+        amount_out: amount_out as i64,
+        provider,
+        path,
+        estimated_fee_usd,
     };
 
     let result = RouteExecutionService::execute_route_with_quota(
         &db,
         route_input,
-        payload.anchor_domain.as_deref(),
-        payload.anchor_transaction_id.as_deref(),
+        anchor_domain.as_deref(),
+        anchor_transaction_id.as_deref(),
     )
     .await
     .map_err(|e| AppError::BadRequest(format!("Route execution failed: {}", e)))?;
@@ -274,25 +172,22 @@ async fn execute_route_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::validation::{validate_asset_code, validate_stellar_address};
 
     #[test]
     fn test_validate_stellar_address() {
-        // Valid address (only A-Z and 2-7, length 56, starts with G)
         assert!(validate_stellar_address(
             "GA5Z3IX5VQ3N6FB77T342A27RWRN7CKEZ63M3W7S5VJB3D77J6F2JAFK"
         )
         .is_ok());
 
-        // Invalid starting char
         assert!(validate_stellar_address(
             "SA5Z3IX5VQ3N6FB77T342A27RWRN7CKEZ63M3W7S5VJB3D77J6F2JAFK"
         )
         .is_err());
 
-        // Invalid length
         assert!(validate_stellar_address("GA5Z3IX5").is_err());
 
-        // Invalid characters (e.g. contains 0, 1, 8, 9)
         assert!(validate_stellar_address(
             "GA5Z3IX5VQ3N6FB77T342A27RWRN7CKEZ63M3W7S5VJB3D77J6F2JA0K"
         )
@@ -301,12 +196,10 @@ mod tests {
 
     #[test]
     fn test_validate_asset_code() {
-        // Alphanumeric standard
         assert!(validate_asset_code("USDC").is_ok());
         assert!(validate_asset_code("XLM").is_ok());
         assert!(validate_asset_code("EURT").is_ok());
 
-        // Fully qualified
         assert!(validate_asset_code(
             "stellar:USDC:GA5Z3IX5VQ3N6FB77T342A27RWRN7CKEZ63M3W7S5VJB3D77J6F2JAFK"
         )
@@ -320,12 +213,10 @@ mod tests {
         )
         .is_err());
 
-        // ISO-4217 format
         assert!(validate_asset_code("iso4217:USD").is_ok());
         assert!(validate_asset_code("iso4217:NGN").is_ok());
         assert!(validate_asset_code("iso4217:US").is_err());
 
-        // Empty & too long
         assert!(validate_asset_code("").is_err());
         assert!(validate_asset_code("VERYLONGASSETCODE").is_err());
     }
