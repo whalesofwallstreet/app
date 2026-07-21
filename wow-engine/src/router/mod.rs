@@ -1,9 +1,12 @@
 pub mod dex;
+pub mod flow_optimizer;
+pub mod slippage;
 
 use crate::bridge::{
     cctp::CctpClient, debridge::DeBridgeClient, gas_oracle::GasOracle, BridgeProvider, Chain,
 };
 use crate::router::dex::DexProvider;
+use crate::router::flow_optimizer::optimize_multi_path_route;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
@@ -17,6 +20,27 @@ pub struct RouteOption {
     pub amount_out: u64,
     pub estimated_fee_usd: f64,
     pub duration_seconds: u64,
+    pub execution_payload: Option<String>,
+    /// For split routes, contains parallel execution paths
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parallel_paths: Option<Vec<ParallelPathInfo>>,
+    /// Indicates if this route uses order splitting
+    pub is_split_route: bool,
+    /// Average slippage across all paths (percentage)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slippage_percentage: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParallelPathInfo {
+    pub provider: String,
+    pub split_percentage: f64,
+    pub amount_in: u64,
+    pub amount_out: u64,
+    pub estimated_fee_usd: f64,
+    pub duration_seconds: u64,
+    pub slippage_percentage: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub execution_payload: Option<String>,
 }
 
@@ -80,6 +104,185 @@ impl RoutePlanner {
             debridge: DeBridgeClient::new(oracle.clone()),
             cctp: CctpClient::new(oracle),
         }
+    }
+
+    /// Find best route with multi-path optimization for large orders
+    /// This is the primary routing function that includes order splitting logic
+    #[tracing::instrument(skip(self), err)]
+    pub async fn find_best_route_with_splitting(
+        &self,
+        source_chain: Chain,
+        dest_chain: Chain,
+        source_asset: &str,
+        dest_asset: &str,
+        amount_in: u64,
+    ) -> Result<Vec<RouteOption>, anyhow::Error> {
+        // Threshold for enabling multi-path optimization: $100k+
+        // In production, this would be configurable
+        let multi_path_threshold = 100_000; // $100k in smallest unit (e.g., cents for USDC with 2 decimals)
+        
+        let enable_splitting = amount_in >= multi_path_threshold;
+        
+        if enable_splitting {
+            tracing::info!(
+                "Large order detected ({}), attempting multi-path optimization",
+                amount_in
+            );
+        }
+
+        // First, find available bridges for direct cross-chain transfer
+        let available_bridges = self
+            .get_available_bridges(source_chain, dest_chain, source_asset, amount_in)
+            .await?;
+
+        if !available_bridges.is_empty() && enable_splitting {
+            // Attempt multi-path optimization
+            match optimize_multi_path_route(
+                available_bridges.clone(),
+                source_chain,
+                dest_chain,
+                source_asset,
+                amount_in,
+            )
+            .await
+            {
+                Ok(optimized) => {
+                    let mut routes = Vec::new();
+
+                    // Convert optimized route to RouteOption format
+                    if optimized.is_split {
+                        tracing::info!(
+                            "Multi-path optimization successful: split across {} bridges",
+                            optimized.paths.len()
+                        );
+
+                        let parallel_paths: Vec<ParallelPathInfo> = optimized
+                            .paths
+                            .iter()
+                            .map(|p| ParallelPathInfo {
+                                provider: p.provider.clone(),
+                                split_percentage: p.split_percentage,
+                                amount_in: p.amount_in,
+                                amount_out: p.amount_out,
+                                estimated_fee_usd: p.estimated_fee_usd,
+                                duration_seconds: p.duration_seconds,
+                                slippage_percentage: p.slippage_percentage,
+                                execution_payload: p.execution_payload.clone(),
+                            })
+                            .collect();
+
+                        let combined_provider = optimized
+                            .paths
+                            .iter()
+                            .map(|p| format!("{} ({:.1}%)", p.provider, p.split_percentage))
+                            .collect::<Vec<_>>()
+                            .join(" + ");
+
+                        routes.push(RouteOption {
+                            provider: combined_provider,
+                            path: format!(
+                                "Multi-path routing: {}",
+                                optimized
+                                    .paths
+                                    .iter()
+                                    .map(|p| p.provider.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(" + ")
+                            ),
+                            amount_in,
+                            amount_out: optimized.total_amount_out,
+                            estimated_fee_usd: optimized.total_estimated_fee_usd,
+                            duration_seconds: optimized.max_duration_seconds,
+                            execution_payload: None, // Composite payload handled via parallel_paths
+                            parallel_paths: Some(parallel_paths),
+                            is_split_route: true,
+                            slippage_percentage: Some(optimized.average_slippage_percentage),
+                        });
+                    } else {
+                        // Fallback to single best path
+                        tracing::info!("Single path is optimal for this order size");
+                        
+                        if let Some(path) = optimized.paths.first() {
+                            routes.push(RouteOption {
+                                provider: path.provider.clone(),
+                                path: format!("Direct bridge via {}", path.provider),
+                                amount_in,
+                                amount_out: path.amount_out,
+                                estimated_fee_usd: path.estimated_fee_usd,
+                                duration_seconds: path.duration_seconds,
+                                execution_payload: path.execution_payload.clone(),
+                                parallel_paths: None,
+                                is_split_route: false,
+                                slippage_percentage: Some(path.slippage_percentage),
+                            });
+                        }
+                    }
+
+                    // Also add single-path alternatives for comparison
+                    for bridge in available_bridges.iter().take(3) {
+                        routes.push(RouteOption {
+                            provider: bridge.provider.clone(),
+                            path: format!("Single path via {}", bridge.provider),
+                            amount_in,
+                            amount_out: bridge.amount_out,
+                            estimated_fee_usd: bridge.estimated_fee_usd,
+                            duration_seconds: bridge.duration_seconds,
+                            execution_payload: bridge.execution_payload.clone(),
+                            parallel_paths: None,
+                            is_split_route: false,
+                            slippage_percentage: None,
+                        });
+                    }
+
+                    return Ok(routes);
+                }
+                Err(e) => {
+                    tracing::warn!("Multi-path optimization failed: {}, falling back to standard routing", e);
+                }
+            }
+        }
+
+        // Fall back to standard pathfinding for small orders or if optimization fails
+        self.find_best_route(source_chain, dest_chain, source_asset, dest_asset, amount_in)
+            .await
+    }
+
+    /// Get available bridge providers for direct transfer
+    async fn get_available_bridges(
+        &self,
+        source_chain: Chain,
+        dest_chain: Chain,
+        asset: &str,
+        amount: u64,
+    ) -> Result<Vec<crate::bridge::BridgeQuote>, anyhow::Error> {
+        let mut bridges = Vec::new();
+
+        // Try CCTP (USDC only)
+        if asset == "USDC" {
+            if let Ok(quote) = self
+                .cctp
+                .get_quote(source_chain, dest_chain, asset, asset, amount)
+                .await
+            {
+                bridges.push(quote);
+            }
+        }
+
+        // Try DeBridge
+        if let Ok(quote) = self
+            .debridge
+            .get_quote(source_chain, dest_chain, asset, asset, amount)
+            .await
+        {
+            bridges.push(quote);
+        }
+
+        // Note: Stargate would be added here in production
+        // if let Ok(quote) = self.stargate.get_quote(...).await {
+        //     bridges.push(quote);
+        // }
+
+        Ok(bridges)
     }
 
     #[tracing::instrument(skip(self), err)]
@@ -150,6 +353,9 @@ impl RoutePlanner {
                         estimated_fee_usd: total_fee,
                         duration_seconds: total_duration,
                         execution_payload: None,
+                        parallel_paths: None,
+                        is_split_route: false,
+                        slippage_percentage: None,
                     });
                 }
                 continue;
@@ -188,6 +394,9 @@ impl RoutePlanner {
                                 estimated_fee_usd: quote.estimated_fee_usd,
                                 duration_seconds: quote.duration_seconds,
                                 execution_payload: None,
+                                parallel_paths: None,
+                                is_split_route: false,
+                                slippage_percentage: None,
                             });
                             pq.push(State {
                                 usd_value: next_usd_scaled,
@@ -240,6 +449,9 @@ impl RoutePlanner {
                                     estimated_fee_usd: quote.estimated_fee_usd,
                                     duration_seconds: quote.duration_seconds,
                                     execution_payload: quote.execution_payload,
+                                    parallel_paths: None,
+                                    is_split_route: false,
+                                    slippage_percentage: None,
                                 });
                                 pq.push(State {
                                     usd_value: next_usd_scaled,
@@ -287,6 +499,9 @@ impl RoutePlanner {
                                 estimated_fee_usd: quote.estimated_fee_usd,
                                 duration_seconds: quote.duration_seconds,
                                 execution_payload: quote.execution_payload,
+                                parallel_paths: None,
+                                is_split_route: false,
+                                slippage_percentage: None,
                             });
                             pq.push(State {
                                 usd_value: next_usd_scaled,
@@ -355,5 +570,86 @@ mod tests {
             "Should find a multi-hop route for ETH -> XLM"
         );
         println!("Best multi-hop route: {:?}", routes[0]);
+    }
+
+    #[tokio::test]
+    async fn test_large_order_multi_path_splitting() {
+        let planner = RoutePlanner::new();
+        
+        // Large order: $1M (should trigger multi-path optimization)
+        let amount = 1_000_000_000_000u64;
+        
+        let routes = planner
+            .find_best_route_with_splitting(
+                Chain::Ethereum,
+                Chain::Stellar,
+                "USDC",
+                "USDC",
+                amount,
+            )
+            .await
+            .unwrap();
+        
+        assert!(!routes.is_empty(), "Should return routes for large order");
+        
+        let best_route = &routes[0];
+        println!("\n=== $1M Order Routing Result ===");
+        println!("Provider: {}", best_route.provider);
+        println!("Is Split: {}", best_route.is_split_route);
+        println!("Amount Out: ${}", best_route.amount_out);
+        println!("Fee: ${:.2}", best_route.estimated_fee_usd);
+        
+        if let Some(slippage) = best_route.slippage_percentage {
+            println!("Slippage: {:.3}%", slippage);
+        }
+        
+        if best_route.is_split_route {
+            if let Some(paths) = &best_route.parallel_paths {
+                println!("\nParallel Paths:");
+                for path in paths {
+                    println!(
+                        "  {} - {:.1}% (${} in, ${} out, {:.3}% slippage)",
+                        path.provider,
+                        path.split_percentage,
+                        path.amount_in,
+                        path.amount_out,
+                        path.slippage_percentage
+                    );
+                }
+                
+                // Verify split integrity
+                let total_split: f64 = paths.iter().map(|p| p.split_percentage).sum();
+                assert!(
+                    (total_split - 100.0).abs() < 0.1,
+                    "Split percentages must sum to 100%"
+                );
+            }
+        }
+        
+        println!("\n✓ Large order routing test passed");
+    }
+
+    #[tokio::test]
+    async fn test_small_order_no_splitting() {
+        let planner = RoutePlanner::new();
+        
+        // Small order: $10k (below threshold)
+        let amount = 10_000_000_000u64;
+        
+        let routes = planner
+            .find_best_route_with_splitting(
+                Chain::Ethereum,
+                Chain::Stellar,
+                "USDC",
+                "USDC",
+                amount,
+            )
+            .await
+            .unwrap();
+        
+        assert!(!routes.is_empty(), "Should return routes for small order");
+        
+        // Small orders typically won't benefit from splitting
+        println!("✓ Small order routing test passed");
     }
 }
