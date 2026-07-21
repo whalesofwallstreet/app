@@ -22,6 +22,7 @@ retry-policies = "0.5.2"
 tracing = "0.1.44"
 envy = "0.4.2"
 moka = { version = "0.12.15", features = ["future"] }
+sqlx = { version = "0.7", features = ["postgres", "runtime-tokio-native-tls", "uuid", "chrono"] }
 
 [dev-dependencies]
 axum-test = "16"

@@ -1,0 +1,5 @@
+# SQLx offline mode configuration
+# This file enables compile-time SQL checking via sqlx-cli
+
+[db]
+database-url = "postgres://postgres:postgres@localhost/wow_engine"
