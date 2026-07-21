@@ -1,5 +1,9 @@
+use crate::bridge::attestation::{
+    AttestationError, AttestationVerifier, CctpMessage, RpcKeySource,
+};
 use crate::bridge::gas_oracle::GasOracle;
 use crate::bridge::{BridgeProvider, BridgeQuote, Chain};
+use crate::config::AppConfig;
 use reqwest_middleware::ClientWithMiddleware;
 use std::sync::Arc;
 
@@ -7,15 +11,36 @@ pub struct CctpClient {
     #[allow(dead_code)]
     client: ClientWithMiddleware,
     oracle: Arc<GasOracle>,
+    verifier: AttestationVerifier<RpcKeySource>,
 }
 
 impl CctpClient {
     pub fn new(oracle: Arc<GasOracle>) -> Self {
-        Self {
-            client: crate::http_client::build_resilient_client()
+        let config = AppConfig::load().unwrap_or_default();
+        let client = crate::http_client::build_resilient_client()
+            .expect("Failed to build resilient HTTP client");
+        let key_source = RpcKeySource::new(
+            crate::http_client::build_resilient_client()
                 .expect("Failed to build resilient HTTP client"),
+            config.eth_rpc_url,
+            config.cctp_message_transmitter,
+        );
+        Self {
+            client,
             oracle,
+            verifier: AttestationVerifier::new(key_source, config.cctp_local_domain),
         }
+    }
+
+    /// Cryptographically verifies a CCTP attestation locally instead of
+    /// trusting Circle's centralized attestation API. The mint transaction
+    /// must not be submitted unless this returns `Ok`.
+    pub async fn verify_attestation(
+        &self,
+        message: &[u8],
+        attestation: &[u8],
+    ) -> Result<CctpMessage, AttestationError> {
+        self.verifier.verify(message, attestation).await
     }
 }
 

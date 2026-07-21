@@ -42,6 +42,7 @@ pub trait BridgeProvider: Send + Sync {
     ) -> impl std::future::Future<Output = Result<BridgeQuote, anyhow::Error>> + Send;
 }
 
+pub mod attestation;
 pub mod cctp;
 pub mod debridge;
 pub mod gas_oracle;
