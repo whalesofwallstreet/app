@@ -1,6 +1,7 @@
 use crate::anchor::{sep24::Sep24Client, sep38::Sep38Client, Sep24InteractiveResponse, Sep38Quote};
 use crate::bridge::Chain;
 use crate::error::AppError;
+use crate::router::slippage::SlippageError;
 use crate::router::{RouteOption, RoutePlanner};
 use axum::{
     routing::{get, post},
@@ -100,7 +101,17 @@ async fn quote_handler(Json(payload): Json<QuoteRequest>) -> Result<Json<QuoteRe
             &payload.dest_asset,
             payload.amount_in,
         )
-        .await?;
+        .await
+        .map_err(|err| {
+            // A catastrophic price-impact rejection is a property of the
+            // requested trade, not an engine failure: report it as a 400
+            // with the explanatory message.
+            if err.downcast_ref::<SlippageError>().is_some() {
+                AppError::BadRequest(err.to_string())
+            } else {
+                AppError::Internal(err)
+            }
+        })?;
     Ok(Json(QuoteResponse { routes }))
 }
 
