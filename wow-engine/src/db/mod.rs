@@ -22,6 +22,16 @@ impl Database {
         Ok(Database { pool })
     }
 
+    /// Applies all pending migrations from the `migrations/` directory.
+    ///
+    /// This uses [`sqlx::migrate!`] which embeds the SQL files at compile time,
+    /// meaning the binary is self-contained and no external migration files are
+    /// needed at runtime. Migrations are applied in version order and each is
+    /// wrapped in a transaction, making them atomic and safe to retry on failure.
+    pub async fn run_migrations(&self) -> Result<(), sqlx::migrate::MigrateError> {
+        sqlx::migrate!("./migrations").run(&self.pool).await
+    }
+
     pub async fn begin(&self) -> Result<Transaction<'static, sqlx::Postgres>, sqlx::Error> {
         self.pool.begin().await
     }

@@ -42,7 +42,18 @@ async fn main() -> anyhow::Result<()> {
     // 1. Connect to the database (required for route execution/quota tracking)
     let db = match config.get_database_url() {
         Ok(url) => match wow_engine::db::Database::new(&url).await {
-            Ok(db) => Some(db),
+            Ok(db) => {
+                // Apply any pending schema migrations before serving traffic.
+                // This ensures the database schema always matches the binary's expectations,
+                // eliminating configuration drift across environments.
+                tracing::info!("Running pending database migrations...");
+                if let Err(err) = db.run_migrations().await {
+                    tracing::error!("Fatal: failed to apply database migrations: {err}");
+                    return Err(err.into());
+                }
+                tracing::info!("Database migrations applied successfully.");
+                Some(db)
+            }
             Err(err) => {
                 tracing::warn!("Failed to connect to database: {err}. /api/v1/execute-route will be unavailable.");
                 None
