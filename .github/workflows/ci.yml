@@ -18,6 +18,25 @@ jobs:
       run:
         working-directory: wow-engine
 
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: wow_engine
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/wow_engine
+      SQLX_OFFLINE: true
+
     steps:
       - uses: actions/checkout@v4
 
@@ -36,6 +55,17 @@ jobs:
 
       - name: Clippy Lints
         run: cargo clippy -- -D warnings
+
+      # Verifies that the .sqlx offline cache is up to date.
+      # If a developer modifies a sqlx::query! macro but forgets to run
+      # `cargo sqlx prepare`, this step will fail and block the PR.
+      - name: Verify SQLx offline cache is up to date
+        run: |
+          cargo install sqlx-cli --no-default-features --features postgres --locked
+          sqlx migrate run
+          cargo sqlx prepare --check
+        env:
+          SQLX_OFFLINE: false
 
       - name: Run Tests
         run: cargo test
