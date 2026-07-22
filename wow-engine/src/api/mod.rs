@@ -12,7 +12,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub mod auth;
 pub mod validation;
+use auth::SignatureVerifier;
 use validation::{validate_asset_code, validate_stellar_address};
 
 #[derive(Deserialize, Debug)]
@@ -75,15 +77,32 @@ pub struct HealthResponse {
     pub timestamp: String,
 }
 
-pub fn create_router(db: Option<Database>) -> Router {
-    Router::new()
+/// Builds the application router.
+///
+/// `db` injects the (optional) database used by `/execute-route`. `verifier`
+/// injects the Ed25519 request-signature enforcement: when `Some`, every route
+/// except the public allowlist ([`auth::PUBLIC_PATHS`]) requires a valid
+/// signature; when `None`, verification is disabled entirely (intended only for
+/// local development — see `main`, which warns loudly in that case).
+pub fn create_router(db: Option<Database>, verifier: Option<SignatureVerifier>) -> Router {
+    let router = Router::new()
         .route("/api/v1/health", get(health_handler))
         .route("/api/v1/quote", post(quote_handler))
         .route("/api/v1/execute-route", post(execute_route_handler))
         .route("/api/v1/anchor/deposit", post(deposit_handler))
         .route("/api/v1/anchor/withdraw", post(withdraw_handler))
         .route("/api/v1/anchor/quote", post(anchor_quote_handler))
-        .layer(Extension(db))
+        .layer(Extension(db));
+
+    // The signature layer is added last so it runs *first* — verification
+    // happens before any handler (or its body extractor) sees the request.
+    match verifier {
+        Some(verifier) => router.layer(axum::middleware::from_fn_with_state(
+            verifier,
+            auth::verify_signature,
+        )),
+        None => router,
+    }
 }
 
 async fn health_handler() -> Json<HealthResponse> {

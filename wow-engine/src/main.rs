@@ -65,12 +65,30 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    // 2. Initialize API router with CORS enabled for seamless frontend calls
-    let app = wow_engine::api::create_router(db)
+    // 2. Build the Ed25519 signature verifier for internal service-to-service
+    //    calls. When no key is configured we run with verification DISABLED and
+    //    warn loudly — acceptable for local dev, never for production.
+    let verifier = match config.signing_public_key.as_deref() {
+        Some(key) => {
+            let verifier = wow_engine::api::auth::SignatureVerifier::from_hex_public_key(key)?;
+            tracing::info!("Ed25519 request-signature verification ENABLED for internal endpoints");
+            Some(verifier)
+        }
+        None => {
+            tracing::warn!(
+                "SIGNING_PUBLIC_KEY not set: internal request-signature verification is DISABLED. \
+                 Protected endpoints are unauthenticated. Do NOT run this way in production."
+            );
+            None
+        }
+    };
+
+    // 3. Initialize API router with CORS enabled for seamless frontend calls
+    let app = wow_engine::api::create_router(db, verifier)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http());
 
-    // 3. Bind TCP listener on configured port
+    // 4. Bind TCP listener on configured port
     let port = config.port;
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -85,7 +103,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("     - POST /api/v1/anchor/withdraw (SEP-24 Withdraw Anchor / Off-ramp)");
     tracing::info!("     - POST /api/v1/anchor/quote    (SEP-38 Anchor Quotes)");
 
-    // 4. Serve incoming TCP requests through Axum pipeline
+    // 5. Serve incoming TCP requests through Axum pipeline
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;

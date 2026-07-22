@@ -6,6 +6,13 @@ pub struct AppConfig {
     pub port: u16,
     #[serde(default)]
     pub database_url: Option<String>,
+    /// Hex-encoded 32-byte Ed25519 public key of trusted internal callers.
+    ///
+    /// When set, all non-public endpoints require a valid `X-Signature`.
+    /// When unset, internal request-signature verification is disabled — safe
+    /// only for local development.
+    #[serde(default)]
+    pub signing_public_key: Option<String>,
 }
 
 fn default_port() -> u16 {
