@@ -14,9 +14,17 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub mod auth;
+pub mod middleware;
 pub mod validation;
 use auth::SignatureVerifier;
 use validation::{validate_asset_code, validate_stellar_address};
+
+#[derive(Serialize)]
+pub struct ConfigResponse {
+    pub chains: Vec<&'static str>,
+    pub assets: Vec<&'static str>,
+    pub bridges: Vec<&'static str>,
+}
 
 #[derive(Deserialize, Debug)]
 pub struct QuoteRequest {
@@ -88,6 +96,10 @@ pub struct HealthResponse {
 pub fn create_router(db: Option<Database>, verifier: Option<SignatureVerifier>) -> Router {
     let router = Router::new()
         .route("/api/v1/health", get(health_handler))
+        .route(
+            "/api/v1/config",
+            get(config_handler).layer(axum::middleware::from_fn(middleware::etag_middleware)),
+        )
         .route("/api/v1/quote", post(quote_handler))
         .route("/api/v1/execute-route", post(execute_route_handler))
         .route("/api/v1/anchor/deposit", post(deposit_handler))
@@ -112,6 +124,14 @@ async fn health_handler() -> Json<HealthResponse> {
         service: "wow-engine",
         version: "0.1.0",
         timestamp: chrono::Utc::now().to_rfc3339(),
+    })
+}
+
+async fn config_handler() -> Json<ConfigResponse> {
+    Json(ConfigResponse {
+        chains: vec!["Ethereum", "Arbitrum", "Solana", "Stellar"],
+        assets: vec!["ETH", "USDC", "SOL", "XLM"],
+        bridges: vec!["deBridge", "CCTP"],
     })
 }
 
