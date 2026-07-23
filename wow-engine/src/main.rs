@@ -83,14 +83,19 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    // 3. Initialize API router with CORS enabled for seamless frontend calls
-    let app = wow_engine::api::create_router(db, verifier)
+    // 3. Initialize API router with CORS enabled for seamless frontend calls.
+    //    A per-request timeout (configurable via REQUEST_TIMEOUT_SECS) guards
+    //    against any single request hanging on a stalled downstream dependency.
+    let request_timeout = std::time::Duration::from_secs(config.request_timeout_secs);
+    let app = wow_engine::api::create_router_with_timeout(db, verifier, request_timeout)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http());
 
     // 4. Bind TCP listener on configured port
     let port = config.port;
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    // Bind all container interfaces so the published Docker port can reach the
+    // service. The container still runs as the unprivileged `nonroot` user.
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
     tracing::info!("Wow Engine is booting up and routing pipeline conversions...");

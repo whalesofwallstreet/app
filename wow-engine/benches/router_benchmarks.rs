@@ -8,6 +8,7 @@ fn bench_router(c: &mut Criterion) {
     std::env::set_var("MOCK_GAS_ORACLE", "true");
 
     let rt = Runtime::new().unwrap();
+    let _guard = rt.enter();
     let planner = RoutePlanner::new();
 
     let mut group = c.benchmark_group("routing_engine");

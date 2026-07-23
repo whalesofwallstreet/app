@@ -2,13 +2,13 @@ name: Wow Engine CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
     paths:
-      - 'wow-engine/**'
+      - "wow-engine/**"
   pull_request:
-    branches: [ main ]
+    branches: [main]
     paths:
-      - 'wow-engine/**'
+      - "wow-engine/**"
 
 jobs:
   test:
@@ -70,6 +70,34 @@ jobs:
       - name: Run Tests
         run: cargo test
 
+  chaos:
+    name: Chaos Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: wow-engine
+
+    # The chaos suite is deliberately self-contained: every outage it simulates
+    # is a Tokio timer driven under a paused clock, so it needs no Postgres and
+    # no network. Running it as its own DB-free job keeps it fast and guarantees
+    # a failure here points at a resilience regression, not flaky infrastructure.
+    env:
+      SQLX_OFFLINE: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: wow-engine
+
+      - name: Run chaos suite
+        run: cargo test --test chaos_tests
+
   benchmark:
     name: Continuous Benchmarking
     runs-on: ubuntu-24.04
@@ -80,6 +108,7 @@ jobs:
     defaults:
       run:
         working-directory: wow-engine
+
     steps:
       - uses: actions/checkout@v4
 
@@ -126,3 +155,4 @@ jobs:
         with:
           path: ./cache
           key: ${{ runner.os }}-benchmark-${{ github.run_id }}
+

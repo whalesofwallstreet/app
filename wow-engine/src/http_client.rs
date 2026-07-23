@@ -47,7 +47,7 @@ mod tests {
 
         // The request should eventually complete with a 500 status after retrying
         let response = client
-            .get(&mock_server.uri())
+            .get(mock_server.uri())
             .send()
             .await
             .expect("Request failed");
@@ -71,7 +71,7 @@ mod tests {
         let client = build_resilient_client().expect("Failed to build client");
 
         let response = client
-            .get(&mock_server.uri())
+            .get(mock_server.uri())
             .send()
             .await
             .expect("Request failed");

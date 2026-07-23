@@ -1,4 +1,5 @@
 use crate::bridge::Chain;
+use crate::router::slippage::{self, PoolReserves};
 
 #[derive(Debug, Clone)]
 pub struct DexQuote {
@@ -10,6 +11,10 @@ pub struct DexQuote {
     pub amount_out: u64,
     pub estimated_fee_usd: f64,
     pub duration_seconds: u64,
+    /// Exact constant-product price impact of this swap, in basis points.
+    pub price_impact_bps: u32,
+    /// Dynamic slippage tolerance derived from the price impact.
+    pub slippage_bps: u32,
 }
 
 pub struct DexProvider;
@@ -42,13 +47,26 @@ impl DexProvider {
         let price_in = get_price(source_asset);
         let price_out = get_price(dest_asset);
 
-        let value_usd = (amount_in as f64) * price_in;
+        // Derive constant-product reserves from the USD depth of the venue's
+        // deepest pool for this pair, expressed in each pool asset.
+        let depth_usd = slippage::pool_depth_usd(chain, source_asset, dest_asset);
+        let reserves = PoolReserves {
+            reserve_in: depth_usd / price_in,
+            reserve_out: depth_usd / price_out,
+        };
 
-        // Apply a 0.3% DEX LP fee
-        let fee_usd = value_usd * 0.003;
-        let value_after_fee = value_usd - fee_usd;
+        // Simulate the swap on the x*y=k curve. Trades whose price impact
+        // exceeds the catastrophic threshold are rejected here, before any
+        // transaction payload is generated.
+        let estimate =
+            slippage::estimate_swap(amount_in as f64, reserves).map_err(anyhow::Error::new)?;
 
-        let amount_out = (value_after_fee / price_out) as u64;
+        // Full execution cost of the leg: USD value in minus the USD value
+        // of the simulated AMM output. This covers both the LP fee and the
+        // value lost to price impact, so it reconciles exactly with
+        // amount_out.
+        let value_in_usd = (amount_in as f64) * price_in;
+        let fee_usd = value_in_usd - estimate.amount_out * price_out;
 
         Ok(DexQuote {
             provider: provider_name.to_string(),
@@ -56,9 +74,67 @@ impl DexProvider {
             source_asset: source_asset.to_string(),
             dest_asset: dest_asset.to_string(),
             amount_in,
-            amount_out,
+            amount_out: estimate.amount_out as u64,
             estimated_fee_usd: fee_usd,
             duration_seconds: 5,
+            price_impact_bps: estimate.price_impact_bps,
+            slippage_bps: estimate.recommended_slippage_bps,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::router::slippage::MAX_PRICE_IMPACT_BPS;
+
+    #[test]
+    fn test_small_trade_gets_tight_slippage() {
+        // $1k of USDC against Ethereum's $50M depth: negligible impact.
+        let quote = DexProvider::get_swap_quote(Chain::Ethereum, "USDC", "ETH", 1_000).unwrap();
+        assert!(quote.price_impact_bps <= 1);
+        assert!(quote.slippage_bps < 50);
+    }
+
+    #[test]
+    fn test_large_trade_on_shallow_chain_gets_wider_slippage() {
+        // The same USD size gets a much wider tolerance on Stellar's $2M
+        // depth than on Ethereum's $50M depth.
+        let deep = DexProvider::get_swap_quote(Chain::Ethereum, "USDC", "XLM", 100_000).unwrap();
+        let shallow = DexProvider::get_swap_quote(Chain::Stellar, "USDC", "XLM", 100_000).unwrap();
+        assert!(shallow.slippage_bps > deep.slippage_bps);
+        assert!(shallow.price_impact_bps > 400);
+    }
+
+    #[test]
+    fn test_fee_reconciles_with_amm_output() {
+        // On a trade with real price impact the reported fee must equal the
+        // USD value in minus the USD value out, not just the flat LP fee.
+        let amount_in: u64 = 100_000; // USDC into Stellar's $2M pool: ~4.7% impact
+        let quote = DexProvider::get_swap_quote(Chain::Stellar, "USDC", "XLM", amount_in).unwrap();
+
+        let value_in_usd = amount_in as f64 * 1.0;
+        let value_out_usd = quote.amount_out as f64 * 0.10;
+        // amount_out is truncated to whole output units, so allow up to one
+        // unit of drift in USD terms.
+        assert!((quote.estimated_fee_usd - (value_in_usd - value_out_usd)).abs() <= 0.10);
+        // The reconciled fee must exceed the flat LP fee alone, since this
+        // trade has significant price impact on top of it.
+        assert!(quote.estimated_fee_usd > value_in_usd * 0.003);
+    }
+
+    #[test]
+    fn test_catastrophic_trade_is_rejected() {
+        // $1M of USDC into a $2M-deep Stellar pool is ~33% price impact.
+        let err =
+            DexProvider::get_swap_quote(Chain::Stellar, "USDC", "XLM", 1_000_000).unwrap_err();
+        let slippage_err = err
+            .downcast_ref::<crate::router::slippage::SlippageError>()
+            .expect("error should carry the typed slippage rejection");
+        assert!(matches!(
+            slippage_err,
+            crate::router::slippage::SlippageError::ExcessivePriceImpact { impact_bps }
+                if *impact_bps > MAX_PRICE_IMPACT_BPS
+        ));
     }
 }

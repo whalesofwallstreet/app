@@ -14,7 +14,7 @@ The Wow Engine coordinates cross-chain liquidity transfers and fiat gateway aggr
 
 ## Developer Integration
 
-The engine is structured as an integratable on-ramp and off-ramp service, exposing a clean REST API so client applications do not need to implement complex cryptographic or cross-chain coordination logic locally. 
+The engine is structured as an integratable on-ramp and off-ramp service, exposing a clean REST API so client applications do not need to implement complex cryptographic or cross-chain coordination logic locally.
 
 ### API Endpoints
 
@@ -96,8 +96,8 @@ curl -X POST http://localhost:8080/api/v1/quote \
       "to_chain": "Stellar",
       "asset": "USDC",
       "amount_in": 100.0,
-      "amount_out": 99.90,
-      "fee": 0.10,
+      "amount_out": 99.9,
+      "fee": 0.1,
       "estimated_time_seconds": 15
     }
   ]
@@ -186,7 +186,53 @@ curl -X POST http://localhost:8080/api/v1/anchor/quote \
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `8080` | TCP port the server listens on |
+| `REQUEST_TIMEOUT_SECS` | `30` | Upper bound on how long any single HTTP request may run before the server aborts it and returns `408 Request Timeout` |
 
 ```bash
 PORT=9090 cargo run
 ```
+
+## Resilience & Chaos Testing
+
+The engine is built to degrade gracefully when its downstream dependencies
+(bridge quote APIs, gas oracles, the Postgres pool) slow down or fail:
+
+- **Per-request timeout** — every request is wrapped in a `TimeoutLayer`
+  (`REQUEST_TIMEOUT_SECS`) so a single stalled dependency can never pin a
+  request, and its resources, open indefinitely. A timed-out request returns
+  `408`.
+- **Circuit breaker** — `resilience::CircuitBreaker` wraps calls to flaky
+  dependencies with a hard call timeout, trips open after a configurable number
+  of consecutive failures, fails fast while open, and self-heals via a half-open
+  probe once a cooldown elapses.
+- **Connection-pool starvation** — when the Postgres pool is exhausted the
+  affected endpoints return `503 Service Unavailable` instead of hanging.
+
+These behaviours are guarded by a deterministic chaos suite in
+[`tests/chaos_tests.rs`](tests/chaos_tests.rs). It uses `tokio::time::pause` and
+`tokio::time::advance` to simulate multi-second network hangs and complete
+partitions *instantly*, with no real waiting and no external services, so it
+runs fast and non-flaky in CI:
+
+```bash
+cargo test --test chaos_tests
+```
+## Building the production container
+
+The production image uses a multi-stage build. Rust and its build tooling are
+kept in the builder stage; the final image is
+`gcr.io/distroless/cc-debian12:nonroot` and contains only the stripped engine
+binary, glibc runtime dependencies, and the CA certificate bundle needed for
+outbound HTTPS calls.
+
+From the repository root:
+
+```bash
+docker build --file wow-engine/Dockerfile --tag wow-engine:local wow-engine
+docker run --rm --publish 8080:8080 wow-engine:local
+```
+
+The container runs as the unprivileged `nonroot` user. It intentionally has no
+shell, package manager, or debugging utilities; for example,
+`docker exec <container> /bin/sh` fails by design. The CI pipeline also checks
+that the image remains below 50 MB and scans its operating-system packages.
