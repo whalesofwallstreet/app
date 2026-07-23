@@ -30,3 +30,8 @@ hex = "0.4.3"
 [dev-dependencies]
 axum-test = "16"
 wiremock = "0.6.5"
+criterion = { version = "0.5.1", features = ["async_tokio"] }
+
+[[bench]]
+name = "router_benchmarks"
+harness = false

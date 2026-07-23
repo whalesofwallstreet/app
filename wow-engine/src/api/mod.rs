@@ -140,6 +140,7 @@ async fn quote_handler(Json(payload): Json<QuoteRequest>) -> Result<Json<QuoteRe
             &payload.source_asset,
             &payload.dest_asset,
             payload.amount_in,
+            false,
         )
         .await?;
     Ok(Json(QuoteResponse { routes }))
