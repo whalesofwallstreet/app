@@ -134,7 +134,7 @@ async fn quote_handler(Json(payload): Json<QuoteRequest>) -> Result<Json<QuoteRe
 
     let planner = RoutePlanner::new();
     let routes = planner
-        .find_best_route(
+        .find_best_route_with_splitting(
             payload.source_chain,
             payload.dest_chain,
             &payload.source_asset,
