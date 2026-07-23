@@ -61,10 +61,12 @@ impl DexProvider {
         let estimate =
             slippage::estimate_swap(amount_in as f64, reserves).map_err(anyhow::Error::new)?;
 
-        let value_usd = (amount_in as f64) * price_in;
-
-        // The 0.3% LP fee plus the value lost to price impact.
-        let fee_usd = value_usd * (slippage::LP_FEE_BPS as f64) / 10_000.0;
+        // Full execution cost of the leg: USD value in minus the USD value
+        // of the simulated AMM output. This covers both the LP fee and the
+        // value lost to price impact, so it reconciles exactly with
+        // amount_out.
+        let value_in_usd = (amount_in as f64) * price_in;
+        let fee_usd = value_in_usd - estimate.amount_out * price_out;
 
         Ok(DexQuote {
             provider: provider_name.to_string(),
@@ -102,6 +104,23 @@ mod tests {
         let shallow = DexProvider::get_swap_quote(Chain::Stellar, "USDC", "XLM", 100_000).unwrap();
         assert!(shallow.slippage_bps > deep.slippage_bps);
         assert!(shallow.price_impact_bps > 400);
+    }
+
+    #[test]
+    fn test_fee_reconciles_with_amm_output() {
+        // On a trade with real price impact the reported fee must equal the
+        // USD value in minus the USD value out, not just the flat LP fee.
+        let amount_in: u64 = 100_000; // USDC into Stellar's $2M pool: ~4.7% impact
+        let quote = DexProvider::get_swap_quote(Chain::Stellar, "USDC", "XLM", amount_in).unwrap();
+
+        let value_in_usd = amount_in as f64 * 1.0;
+        let value_out_usd = quote.amount_out as f64 * 0.10;
+        // amount_out is truncated to whole output units, so allow up to one
+        // unit of drift in USD terms.
+        assert!((quote.estimated_fee_usd - (value_in_usd - value_out_usd)).abs() <= 0.10);
+        // The reconciled fee must exceed the flat LP fee alone, since this
+        // trade has significant price impact on top of it.
+        assert!(quote.estimated_fee_usd > value_in_usd * 0.003);
     }
 
     #[test]
