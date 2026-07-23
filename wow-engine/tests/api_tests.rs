@@ -38,7 +38,7 @@ async fn test_quote_endpoint_bad_request() {
 
 #[tokio::test]
 async fn test_quote_endpoint_exposes_dynamic_slippage() {
-    let app = create_router();
+    let app = create_router(None, None);
     let server = TestServer::new(app).unwrap();
 
     let payload = json!({
@@ -67,7 +67,7 @@ async fn test_quote_endpoint_exposes_dynamic_slippage() {
 
 #[tokio::test]
 async fn test_quote_endpoint_rejects_catastrophic_price_impact() {
-    let app = create_router();
+    let app = create_router(None, None);
     let server = TestServer::new(app).unwrap();
 
     // ~$180M of ETH exceeds the 15% price-impact ceiling on every pool.

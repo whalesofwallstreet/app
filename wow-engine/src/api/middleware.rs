@@ -63,11 +63,7 @@ pub async fn etag_middleware(req: Request, next: Next) -> Result<Response, Statu
 mod tests {
     use super::*;
     use axum::{
-        body::Body,
-        extract::Request,
         http::{header, StatusCode},
-        middleware::Next,
-        response::Response,
         routing::get,
         Router,
     };

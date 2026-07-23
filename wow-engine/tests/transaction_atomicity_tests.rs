@@ -1,12 +1,8 @@
-use chrono::Utc;
 use sqlx::postgres::PgPoolOptions;
-use sqlx::Transaction;
 use std::time::Duration;
 use uuid::Uuid;
 use wow_engine::db::models::{RouteExecution, RouteExecutionInput};
-use wow_engine::db::operations::{
-    AnchorTransactionRepo, RouteExecutionRepo, UserHistoryRepo, UserQuotaRepo,
-};
+use wow_engine::db::operations::{AnchorTransactionRepo, RouteExecutionRepo, UserQuotaRepo};
 
 async fn setup_db() -> Result<sqlx::postgres::PgPool, sqlx::Error> {
     let database_url = std::env::var("TEST_DATABASE_URL")
@@ -86,7 +82,7 @@ async fn test_atomic_route_execution_commit() {
     let quota_result = UserQuotaRepo::get_or_create(&mut tx, user_id).await;
     assert!(quota_result.is_ok(), "Quota creation should succeed");
 
-    let quota = quota_result.unwrap();
+    let _quota = quota_result.unwrap();
     let update_quota_result = UserQuotaRepo::update_usage(&mut tx, user_id, 500.0).await;
     assert!(update_quota_result.is_ok(), "Quota update should succeed");
 
