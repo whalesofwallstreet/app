@@ -1,4 +1,7 @@
 use crate::anchor::{sep24::Sep24Client, sep38::Sep38Client, Sep24InteractiveResponse, Sep38Quote};
+use crate::bridge::attestation::AttestationError;
+use crate::bridge::cctp::CctpClient;
+use crate::bridge::gas_oracle::GasOracle;
 use crate::bridge::Chain;
 use crate::error::AppError;
 use crate::router::{RouteOption, RoutePlanner};
@@ -7,6 +10,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use std::sync::{Arc, OnceLock};
 
 pub mod validation;
 use validation::{validate_asset_code, validate_stellar_address};
@@ -47,6 +51,25 @@ pub struct AnchorQuoteRequest {
     pub sell_amount: f64,
 }
 
+#[derive(Deserialize, Debug)]
+pub struct VerifyAttestationRequest {
+    /// Chain the mint will execute on; the expected CCTP destination domain
+    /// is derived from this per request.
+    pub dest_chain: Chain,
+    /// Raw `MessageTransmitter` message, hex encoded (0x prefix optional).
+    pub message: String,
+    /// Concatenated 65-byte attester signatures, hex encoded.
+    pub attestation: String,
+}
+
+#[derive(Serialize)]
+pub struct VerifyAttestationResponse {
+    pub verified: bool,
+    pub source_domain: u32,
+    pub destination_domain: u32,
+    pub nonce: u64,
+}
+
 #[derive(Serialize)]
 pub struct HealthResponse {
     pub status: &'static str,
@@ -62,6 +85,52 @@ pub fn create_router() -> Router {
         .route("/api/v1/anchor/deposit", post(deposit_handler))
         .route("/api/v1/anchor/withdraw", post(withdraw_handler))
         .route("/api/v1/anchor/quote", post(anchor_quote_handler))
+        .route(
+            "/api/v1/cctp/verify-attestation",
+            post(verify_attestation_handler),
+        )
+}
+
+/// Shared CCTP client so the attester-key cache and the durable nonce store
+/// are consistent across requests instead of being rebuilt per call.
+fn cctp_client() -> &'static CctpClient {
+    static CCTP_CLIENT: OnceLock<CctpClient> = OnceLock::new();
+    CCTP_CLIENT.get_or_init(|| CctpClient::new(Arc::new(GasOracle::new())))
+}
+
+fn decode_hex_field(value: &str, field: &str) -> Result<Vec<u8>, AppError> {
+    hex::decode(value.trim_start_matches("0x"))
+        .map_err(|err| AppError::BadRequest(format!("Invalid hex in {field}: {err}")))
+}
+
+/// Gate that must pass before a CCTP bridge leg proceeds to the mint: the
+/// attestation is verified locally and cryptographically instead of trusting
+/// Circle's centralized API.
+#[tracing::instrument(err)]
+async fn verify_attestation_handler(
+    Json(payload): Json<VerifyAttestationRequest>,
+) -> Result<Json<VerifyAttestationResponse>, AppError> {
+    let message = decode_hex_field(&payload.message, "message")?;
+    let attestation = decode_hex_field(&payload.attestation, "attestation")?;
+
+    let parsed = cctp_client()
+        .verify_attestation(payload.dest_chain, &message, &attestation)
+        .await
+        .map_err(|err| match err {
+            // Infrastructure faults are server-side errors; everything else
+            // is a property of the submitted attestation.
+            AttestationError::KeySourceUnavailable | AttestationError::NonceStoreUnavailable(_) => {
+                AppError::Internal(anyhow::Error::new(err))
+            }
+            other => AppError::BadRequest(format!("Attestation rejected: {other}")),
+        })?;
+
+    Ok(Json(VerifyAttestationResponse {
+        verified: true,
+        source_domain: parsed.source_domain,
+        destination_domain: parsed.destination_domain,
+        nonce: parsed.nonce,
+    }))
 }
 
 async fn health_handler() -> Json<HealthResponse> {

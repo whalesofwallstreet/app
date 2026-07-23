@@ -10,9 +10,10 @@ pub struct AppConfig {
     /// Address of Circle's `MessageTransmitter` contract on the source chain.
     #[serde(default = "default_cctp_message_transmitter")]
     pub cctp_message_transmitter: String,
-    /// CCTP domain identifier of the chain this engine mints on.
-    #[serde(default = "default_cctp_local_domain")]
-    pub cctp_local_domain: u32,
+    /// Path of the append-only log recording consumed CCTP nonces, so
+    /// replay protection survives restarts and redeploys.
+    #[serde(default = "default_cctp_nonce_store_path")]
+    pub cctp_nonce_store_path: String,
 }
 
 fn default_port() -> u16 {
@@ -28,9 +29,8 @@ fn default_cctp_message_transmitter() -> String {
     "0x0a992d191deec32afe36203ad87d7d289a738f81".to_string()
 }
 
-fn default_cctp_local_domain() -> u32 {
-    // Arbitrum in CCTP domain numbering.
-    3
+fn default_cctp_nonce_store_path() -> String {
+    "data/cctp_consumed_nonces.log".to_string()
 }
 
 impl Default for AppConfig {
@@ -39,7 +39,7 @@ impl Default for AppConfig {
             port: default_port(),
             eth_rpc_url: default_eth_rpc_url(),
             cctp_message_transmitter: default_cctp_message_transmitter(),
-            cctp_local_domain: default_cctp_local_domain(),
+            cctp_nonce_store_path: default_cctp_nonce_store_path(),
         }
     }
 }

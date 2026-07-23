@@ -12,10 +12,12 @@
 //! [`AttesterKeySource`], so key rotations performed by Circle on-chain are
 //! picked up automatically without redeploying the engine.
 
+use crate::bridge::Chain;
 use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
 use sha3::{Digest, Keccak256};
 use std::collections::{BTreeSet, HashSet};
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use thiserror::Error;
@@ -56,7 +58,9 @@ pub enum AttestationError {
     #[error("unsupported message version {0}, expected {SUPPORTED_MESSAGE_VERSION}")]
     UnsupportedVersion(u32),
 
-    #[error("destination domain mismatch: message targets {actual}, local domain is {expected}")]
+    #[error(
+        "destination domain mismatch: message targets {actual}, but the requested destination chain is domain {expected}"
+    )]
     DomainMismatch { expected: u32, actual: u32 },
 
     #[error("nonce {nonce} from source domain {source_domain} was already consumed (replay)")]
@@ -85,6 +89,25 @@ pub enum AttestationError {
 
     #[error("attester key source unavailable and no cached key set exists")]
     KeySourceUnavailable,
+
+    #[error("nonce store unavailable, failing closed: {0}")]
+    NonceStoreUnavailable(String),
+}
+
+/// CCTP domain identifier for each chain the engine routes to, following
+/// Circle's domain numbering. The destination domain expected during
+/// verification is derived from the actual destination chain of the request,
+/// never from static configuration.
+pub fn cctp_domain(chain: Chain) -> u32 {
+    match chain {
+        Chain::Ethereum => 0,
+        Chain::Arbitrum => 3,
+        Chain::Solana => 5,
+        // Stellar is not a native CCTP chain. It gets an engine-assigned
+        // identifier far outside Circle's allocated range so a forged
+        // message can never alias a real CCTP domain.
+        Chain::Stellar => 1_000_000,
+    }
 }
 
 /// Decoded header of a raw CCTP `MessageTransmitter` message.
@@ -327,26 +350,122 @@ struct CachedAttesters {
     fetched_at: Instant,
 }
 
+/// Records consumed (source domain, nonce) pairs so a burn message can only
+/// be minted once. Implementations must survive process restarts: an
+/// attestation consumed before a redeploy must still be rejected after it.
+pub trait NonceStore: Send + Sync {
+    fn is_consumed(&self, source_domain: u32, nonce: u64) -> Result<bool, anyhow::Error>;
+    fn mark_consumed(&self, source_domain: u32, nonce: u64) -> Result<(), anyhow::Error>;
+}
+
+/// Volatile store for tests and ephemeral tooling. Production deployments
+/// should use [`FileNonceStore`] (or another durable backend) so replay
+/// protection is not wiped by a restart.
+#[derive(Default)]
+pub struct InMemoryNonceStore {
+    consumed: Mutex<HashSet<(u32, u64)>>,
+}
+
+impl NonceStore for InMemoryNonceStore {
+    fn is_consumed(&self, source_domain: u32, nonce: u64) -> Result<bool, anyhow::Error> {
+        Ok(self
+            .consumed
+            .lock()
+            .expect("nonce set lock poisoned")
+            .contains(&(source_domain, nonce)))
+    }
+
+    fn mark_consumed(&self, source_domain: u32, nonce: u64) -> Result<(), anyhow::Error> {
+        self.consumed
+            .lock()
+            .expect("nonce set lock poisoned")
+            .insert((source_domain, nonce));
+        Ok(())
+    }
+}
+
+/// Durable store backed by an append-only log file. The full set is loaded
+/// into memory at startup; every newly consumed nonce is appended and
+/// flushed before verification succeeds, so a consumed attestation stays
+/// consumed across restarts and redeploys.
+pub struct FileNonceStore {
+    state: Mutex<FileNonceState>,
+}
+
+struct FileNonceState {
+    consumed: HashSet<(u32, u64)>,
+    writer: std::io::BufWriter<std::fs::File>,
+}
+
+impl FileNonceStore {
+    pub fn open(path: impl Into<PathBuf>) -> Result<Self, anyhow::Error> {
+        let path = path.into();
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+
+        let mut consumed = HashSet::new();
+        if path.exists() {
+            for line in std::fs::read_to_string(&path)?.lines() {
+                let mut parts = line.split_whitespace();
+                if let (Some(domain), Some(nonce)) = (parts.next(), parts.next()) {
+                    consumed.insert((domain.parse()?, nonce.parse()?));
+                }
+            }
+        }
+
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)?;
+
+        Ok(Self {
+            state: Mutex::new(FileNonceState {
+                consumed,
+                writer: std::io::BufWriter::new(file),
+            }),
+        })
+    }
+}
+
+impl NonceStore for FileNonceStore {
+    fn is_consumed(&self, source_domain: u32, nonce: u64) -> Result<bool, anyhow::Error> {
+        Ok(self
+            .state
+            .lock()
+            .expect("nonce store lock poisoned")
+            .consumed
+            .contains(&(source_domain, nonce)))
+    }
+
+    fn mark_consumed(&self, source_domain: u32, nonce: u64) -> Result<(), anyhow::Error> {
+        use std::io::Write;
+        let mut state = self.state.lock().expect("nonce store lock poisoned");
+        if state.consumed.insert((source_domain, nonce)) {
+            writeln!(state.writer, "{source_domain} {nonce}")?;
+            state.writer.flush()?;
+        }
+        Ok(())
+    }
+}
+
 /// Verifies CCTP attestations against a cached, auto-rotating attester set.
 pub struct AttestationVerifier<S: AttesterKeySource> {
     source: S,
-    local_domain: u32,
     cache_ttl: Duration,
     cache: Mutex<Option<CachedAttesters>>,
-    consumed_nonces: Mutex<HashSet<(u32, u64)>>,
+    nonce_store: Box<dyn NonceStore>,
 }
 
 impl<S: AttesterKeySource> AttestationVerifier<S> {
-    /// `local_domain` is the CCTP domain identifier of the chain this engine
-    /// mints on; messages addressed to any other domain are rejected so an
-    /// attestation for one chain can never be replayed against another.
-    pub fn new(source: S, local_domain: u32) -> Self {
+    pub fn new(source: S, nonce_store: Box<dyn NonceStore>) -> Self {
         Self {
             source,
-            local_domain,
             cache_ttl: DEFAULT_KEY_CACHE_TTL,
             cache: Mutex::new(None),
-            consumed_nonces: Mutex::new(HashSet::new()),
+            nonce_store,
         }
     }
 
@@ -356,17 +475,35 @@ impl<S: AttesterKeySource> AttestationVerifier<S> {
         self
     }
 
-    /// Refreshes the attester set when the cache is missing or stale, then
-    /// runs the bounded synchronous verification. This is the entry point
-    /// callers should use.
+    /// Verifies an attestation over a raw CCTP message.
+    ///
+    /// `expected_destination_domain` must be derived from the actual
+    /// destination chain of the request (see [`cctp_domain`]); messages
+    /// addressed to any other domain are rejected so an attestation for one
+    /// chain can never be replayed against another.
+    ///
+    /// Structural checks (bounds, parse, domain, replay) run synchronously
+    /// before any network access; the attester set is only fetched (or read
+    /// from cache) once the message has passed them. The cryptographic core
+    /// is bounded and synchronous.
     #[tracing::instrument(skip_all, err)]
     pub async fn verify(
         &self,
         message: &[u8],
         attestation: &[u8],
+        expected_destination_domain: u32,
     ) -> Result<CctpMessage, AttestationError> {
+        let parsed = self.precheck(message, attestation, expected_destination_domain)?;
         let attesters = self.current_attesters().await?;
-        self.verify_with_set(message, attestation, &attesters)
+        self.verify_signatures(message, attestation, &attesters)?;
+
+        // Persist before reporting success: if the store fails we fail
+        // closed rather than allow an unrecorded (replayable) mint.
+        self.nonce_store
+            .mark_consumed(parsed.source_domain, parsed.nonce)
+            .map_err(|err| AttestationError::NonceStoreUnavailable(err.to_string()))?;
+
+        Ok(parsed)
     }
 
     /// Returns the cached attester set, re-fetching it from the key source
@@ -403,13 +540,13 @@ impl<S: AttesterKeySource> AttestationVerifier<S> {
         }
     }
 
-    /// Pure, synchronous, bounded verification of `attestation` over
-    /// `message` against a concrete attester set.
-    fn verify_with_set(
+    /// Synchronous structural validation: bounds, header parse, version,
+    /// destination domain and nonce replay. No cryptography, no network.
+    fn precheck(
         &self,
         message: &[u8],
         attestation: &[u8],
-        attesters: &AttesterSet,
+        expected_destination_domain: u32,
     ) -> Result<CctpMessage, AttestationError> {
         if attestation.is_empty()
             || !attestation.len().is_multiple_of(SIGNATURE_LEN)
@@ -422,26 +559,35 @@ impl<S: AttesterKeySource> AttestationVerifier<S> {
         if parsed.version != SUPPORTED_MESSAGE_VERSION {
             return Err(AttestationError::UnsupportedVersion(parsed.version));
         }
-        if parsed.destination_domain != self.local_domain {
+        if parsed.destination_domain != expected_destination_domain {
             return Err(AttestationError::DomainMismatch {
-                expected: self.local_domain,
+                expected: expected_destination_domain,
                 actual: parsed.destination_domain,
             });
         }
 
-        {
-            let consumed = self
-                .consumed_nonces
-                .lock()
-                .expect("nonce set lock poisoned");
-            if consumed.contains(&(parsed.source_domain, parsed.nonce)) {
-                return Err(AttestationError::ReplayedNonce {
-                    source_domain: parsed.source_domain,
-                    nonce: parsed.nonce,
-                });
-            }
+        let consumed = self
+            .nonce_store
+            .is_consumed(parsed.source_domain, parsed.nonce)
+            .map_err(|err| AttestationError::NonceStoreUnavailable(err.to_string()))?;
+        if consumed {
+            return Err(AttestationError::ReplayedNonce {
+                source_domain: parsed.source_domain,
+                nonce: parsed.nonce,
+            });
         }
 
+        Ok(parsed)
+    }
+
+    /// Pure, synchronous, bounded signature verification of `attestation`
+    /// over `message` against a concrete attester set.
+    fn verify_signatures(
+        &self,
+        message: &[u8],
+        attestation: &[u8],
+        attesters: &AttesterSet,
+    ) -> Result<(), AttestationError> {
         let digest: [u8; 32] = Keccak256::digest(message).into();
 
         // Mirrors MessageTransmitter's on-chain rule: signatures must be
@@ -472,12 +618,7 @@ impl<S: AttesterKeySource> AttestationVerifier<S> {
             });
         }
 
-        self.consumed_nonces
-            .lock()
-            .expect("nonce set lock poisoned")
-            .insert((parsed.source_domain, parsed.nonce));
-
-        Ok(parsed)
+        Ok(())
     }
 }
 
@@ -595,7 +736,10 @@ mod tests {
             threshold,
         )
         .unwrap();
-        AttestationVerifier::new(StaticKeySource::new(set), LOCAL_DOMAIN)
+        AttestationVerifier::new(
+            StaticKeySource::new(set),
+            Box::new(InMemoryNonceStore::default()),
+        )
     }
 
     #[test]
@@ -622,7 +766,10 @@ mod tests {
         let message = test_message(0, LOCAL_DOMAIN, 42);
         let attestation = attest(&message, &[&ATTESTER_1_SECRET, &ATTESTER_2_SECRET]);
 
-        let parsed = verifier.verify(&message, &attestation).await.unwrap();
+        let parsed = verifier
+            .verify(&message, &attestation, LOCAL_DOMAIN)
+            .await
+            .unwrap();
         assert_eq!(parsed.source_domain, 0);
         assert_eq!(parsed.nonce, 42);
         assert_eq!(parsed.message_body, b"depositForBurn:1000000:USDC");
@@ -639,7 +786,10 @@ mod tests {
         let last = tampered.len() - 1;
         tampered[last] ^= 0x01;
 
-        let err = verifier.verify(&tampered, &attestation).await.unwrap_err();
+        let err = verifier
+            .verify(&tampered, &attestation, LOCAL_DOMAIN)
+            .await
+            .unwrap_err();
         // Recovery over a different digest yields a different (unknown)
         // signer, or an outright invalid signature.
         assert!(matches!(
@@ -654,7 +804,10 @@ mod tests {
         let message = test_message(0, LOCAL_DOMAIN, 2);
         let attestation = attest(&message, &[&ROGUE_SECRET]);
 
-        let err = verifier.verify(&message, &attestation).await.unwrap_err();
+        let err = verifier
+            .verify(&message, &attestation, LOCAL_DOMAIN)
+            .await
+            .unwrap_err();
         assert!(matches!(err, AttestationError::UnknownAttester { .. }));
     }
 
@@ -664,7 +817,10 @@ mod tests {
         let message = test_message(0, LOCAL_DOMAIN, 3);
         let attestation = attest(&message, &[&ATTESTER_1_SECRET]);
 
-        let err = verifier.verify(&message, &attestation).await.unwrap_err();
+        let err = verifier
+            .verify(&message, &attestation, LOCAL_DOMAIN)
+            .await
+            .unwrap_err();
         assert_eq!(
             err,
             AttestationError::ThresholdNotMet {
@@ -680,8 +836,14 @@ mod tests {
         let message = test_message(0, LOCAL_DOMAIN, 7);
         let attestation = attest(&message, &[&ATTESTER_1_SECRET]);
 
-        verifier.verify(&message, &attestation).await.unwrap();
-        let err = verifier.verify(&message, &attestation).await.unwrap_err();
+        verifier
+            .verify(&message, &attestation, LOCAL_DOMAIN)
+            .await
+            .unwrap();
+        let err = verifier
+            .verify(&message, &attestation, LOCAL_DOMAIN)
+            .await
+            .unwrap_err();
         assert_eq!(
             err,
             AttestationError::ReplayedNonce {
@@ -693,7 +855,10 @@ mod tests {
         // A different nonce from the same source domain still verifies.
         let next = test_message(0, LOCAL_DOMAIN, 8);
         let next_attestation = attest(&next, &[&ATTESTER_1_SECRET]);
-        verifier.verify(&next, &next_attestation).await.unwrap();
+        verifier
+            .verify(&next, &next_attestation, LOCAL_DOMAIN)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -702,7 +867,10 @@ mod tests {
         let message = test_message(0, LOCAL_DOMAIN + 1, 9);
         let attestation = attest(&message, &[&ATTESTER_1_SECRET]);
 
-        let err = verifier.verify(&message, &attestation).await.unwrap_err();
+        let err = verifier
+            .verify(&message, &attestation, LOCAL_DOMAIN)
+            .await
+            .unwrap_err();
         assert_eq!(
             err,
             AttestationError::DomainMismatch {
@@ -722,7 +890,10 @@ mod tests {
         let mut reversed = ordered[SIGNATURE_LEN..].to_vec();
         reversed.extend_from_slice(&ordered[..SIGNATURE_LEN]);
 
-        let err = verifier.verify(&message, &reversed).await.unwrap_err();
+        let err = verifier
+            .verify(&message, &reversed, LOCAL_DOMAIN)
+            .await
+            .unwrap_err();
         assert_eq!(err, AttestationError::NonIncreasingSigners { index: 1 });
     }
 
@@ -737,7 +908,10 @@ mod tests {
             vec![0u8; SIGNATURE_LEN + 1],
             vec![0u8; (MAX_SIGNATURES + 1) * SIGNATURE_LEN],
         ] {
-            let err = verifier.verify(&message, &bad).await.unwrap_err();
+            let err = verifier
+                .verify(&message, &bad, LOCAL_DOMAIN)
+                .await
+                .unwrap_err();
             assert!(matches!(err, AttestationError::MalformedAttestation(_)));
         }
     }
@@ -748,7 +922,7 @@ mod tests {
         let message = test_message(0, LOCAL_DOMAIN, 12);
 
         let err = verifier
-            .verify(&message, &[0x01u8; SIGNATURE_LEN])
+            .verify(&message, &[0x01u8; SIGNATURE_LEN], LOCAL_DOMAIN)
             .await
             .unwrap_err();
         assert!(matches!(err, AttestationError::InvalidSignature { .. }));
@@ -767,7 +941,10 @@ mod tests {
         attestation[..64].copy_from_slice(&high_s.to_bytes());
         attestation[64] = if attestation[64] == 27 { 28 } else { 27 };
 
-        let err = verifier.verify(&message, &attestation).await.unwrap_err();
+        let err = verifier
+            .verify(&message, &attestation, LOCAL_DOMAIN)
+            .await
+            .unwrap_err();
         assert_eq!(err, AttestationError::MalleableSignature { index: 0 });
     }
 
@@ -775,7 +952,11 @@ mod tests {
     async fn test_truncated_message_is_rejected() {
         let verifier = verifier(1);
         let err = verifier
-            .verify(&[0u8; MESSAGE_HEADER_LEN - 1], &[0u8; SIGNATURE_LEN])
+            .verify(
+                &[0u8; MESSAGE_HEADER_LEN - 1],
+                &[0u8; SIGNATURE_LEN],
+                LOCAL_DOMAIN,
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, AttestationError::MalformedMessage(_)));
@@ -839,10 +1020,128 @@ mod tests {
         assert!(set.contains(&attester_2));
 
         // The fetched set plugs straight into end-to-end verification.
-        let verifier = AttestationVerifier::new(StaticKeySource::new(set), LOCAL_DOMAIN);
+        let verifier = AttestationVerifier::new(
+            StaticKeySource::new(set),
+            Box::new(InMemoryNonceStore::default()),
+        );
         let message = test_message(0, LOCAL_DOMAIN, 30);
         let attestation = attest(&message, &[&ATTESTER_1_SECRET, &ATTESTER_2_SECRET]);
-        verifier.verify(&message, &attestation).await.unwrap();
+        verifier
+            .verify(&message, &attestation, LOCAL_DOMAIN)
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    fn test_cctp_domain_mapping() {
+        // Circle's published domain numbering for natively supported chains.
+        assert_eq!(cctp_domain(Chain::Ethereum), 0);
+        assert_eq!(cctp_domain(Chain::Arbitrum), 3);
+        assert_eq!(cctp_domain(Chain::Solana), 5);
+        // Stellar's engine-assigned identifier must not collide with any
+        // other routed chain.
+        let domains: std::collections::HashSet<u32> = [
+            Chain::Ethereum,
+            Chain::Arbitrum,
+            Chain::Solana,
+            Chain::Stellar,
+        ]
+        .into_iter()
+        .map(cctp_domain)
+        .collect();
+        assert_eq!(domains.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn test_destination_domain_is_per_request() {
+        // One verifier serves every destination chain: the expected domain
+        // comes from the request, not from static configuration.
+        let verifier = verifier(1);
+
+        for (dest_domain, nonce) in [(0u32, 40u64), (3, 41), (5, 42)] {
+            let message = test_message(7, dest_domain, nonce);
+            let attestation = attest(&message, &[&ATTESTER_1_SECRET]);
+
+            // Accepted when the expected domain matches the request's
+            // destination chain.
+            verifier
+                .verify(&message, &attestation, dest_domain)
+                .await
+                .unwrap();
+
+            // The same attestation replayed against a different destination
+            // domain is rejected before any cryptography runs.
+            let other = test_message(7, dest_domain, nonce + 100);
+            let other_attestation = attest(&other, &[&ATTESTER_1_SECRET]);
+            let err = verifier
+                .verify(&other, &other_attestation, dest_domain + 1)
+                .await
+                .unwrap_err();
+            assert_eq!(
+                err,
+                AttestationError::DomainMismatch {
+                    expected: dest_domain + 1,
+                    actual: dest_domain
+                }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_replay_is_rejected_across_restarts() {
+        let dir = std::env::temp_dir().join(format!("wow-nonce-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("consumed_nonces.log");
+
+        let set = AttesterSet::new(
+            [address_from_key(
+                signing_key(&ATTESTER_1_SECRET).verifying_key(),
+            )],
+            1,
+        )
+        .unwrap();
+
+        let message = test_message(0, LOCAL_DOMAIN, 55);
+        let attestation = attest(&message, &[&ATTESTER_1_SECRET]);
+
+        // First process: consume the attestation.
+        {
+            let verifier = AttestationVerifier::new(
+                StaticKeySource::new(set.clone()),
+                Box::new(FileNonceStore::open(&path).unwrap()),
+            );
+            verifier
+                .verify(&message, &attestation, LOCAL_DOMAIN)
+                .await
+                .unwrap();
+        }
+
+        // Second process (fresh store from the same file): the replay must
+        // still be rejected even though all in-memory state is gone.
+        let verifier = AttestationVerifier::new(
+            StaticKeySource::new(set),
+            Box::new(FileNonceStore::open(&path).unwrap()),
+        );
+        let err = verifier
+            .verify(&message, &attestation, LOCAL_DOMAIN)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err,
+            AttestationError::ReplayedNonce {
+                source_domain: 0,
+                nonce: 55
+            }
+        );
+
+        // A fresh nonce still verifies after the restart.
+        let next = test_message(0, LOCAL_DOMAIN, 56);
+        let next_attestation = attest(&next, &[&ATTESTER_1_SECRET]);
+        verifier
+            .verify(&next, &next_attestation, LOCAL_DOMAIN)
+            .await
+            .unwrap();
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]
@@ -874,14 +1173,18 @@ mod tests {
             RotatingSource {
                 fetches: fetches.clone(),
             },
-            LOCAL_DOMAIN,
+            Box::new(InMemoryNonceStore::default()),
         )
         .with_cache_ttl(Duration::ZERO);
 
         // Before rotation only attester 1 is accepted.
         let message = test_message(0, LOCAL_DOMAIN, 20);
         verifier
-            .verify(&message, &attest(&message, &[&ATTESTER_1_SECRET]))
+            .verify(
+                &message,
+                &attest(&message, &[&ATTESTER_1_SECRET]),
+                LOCAL_DOMAIN,
+            )
             .await
             .unwrap();
 
@@ -889,14 +1192,22 @@ mod tests {
         // rejected and attester 2 is accepted.
         let message = test_message(0, LOCAL_DOMAIN, 21);
         let err = verifier
-            .verify(&message, &attest(&message, &[&ATTESTER_1_SECRET]))
+            .verify(
+                &message,
+                &attest(&message, &[&ATTESTER_1_SECRET]),
+                LOCAL_DOMAIN,
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, AttestationError::UnknownAttester { .. }));
 
         let message = test_message(0, LOCAL_DOMAIN, 22);
         verifier
-            .verify(&message, &attest(&message, &[&ATTESTER_2_SECRET]))
+            .verify(
+                &message,
+                &attest(&message, &[&ATTESTER_2_SECRET]),
+                LOCAL_DOMAIN,
+            )
             .await
             .unwrap();
         assert!(fetches.load(Ordering::SeqCst) >= 2);
