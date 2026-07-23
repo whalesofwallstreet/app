@@ -13,10 +13,23 @@ pub struct AppConfig {
     /// only for local development.
     #[serde(default)]
     pub signing_public_key: Option<String>,
+    /// Upper bound, in seconds, on how long any single HTTP request may run
+    /// before the server aborts it and returns `408 Request Timeout`.
+    ///
+    /// This is the outermost backstop against a hung downstream dependency
+    /// pinning a request (and its resources) open indefinitely. Individual
+    /// dependencies enforce their own, tighter timeouts via the resilience
+    /// layer; this guarantees a request can never outlive it.
+    #[serde(default = "default_request_timeout_secs")]
+    pub request_timeout_secs: u64,
 }
 
 fn default_port() -> u16 {
     8080
+}
+
+fn default_request_timeout_secs() -> u64 {
+    30
 }
 
 impl AppConfig {

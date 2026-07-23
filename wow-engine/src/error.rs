@@ -19,6 +19,15 @@ pub enum AppError {
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
 
+    /// A downstream dependency is unavailable or overloaded (e.g. the database
+    /// connection pool is exhausted, or a circuit breaker has tripped open).
+    ///
+    /// Surfaced as `503 Service Unavailable` so clients back off and retry
+    /// rather than treating it as a permanent failure. Crucially, the request
+    /// fails *fast* instead of hanging until an upstream timeout.
+    #[error("Service Unavailable: {0}")]
+    ServiceUnavailable(String),
+
     #[error("Internal Server Error")]
     Internal(#[from] anyhow::Error),
 }
@@ -32,6 +41,10 @@ impl IntoResponse for AppError {
                 // probes/misconfigured callers and should not spam error logs.
                 tracing::debug!("Rejected unauthorized request: {msg}");
                 (StatusCode::UNAUTHORIZED, "Unauthorized".to_string())
+            }
+            AppError::ServiceUnavailable(msg) => {
+                tracing::warn!("Service unavailable: {msg}");
+                (StatusCode::SERVICE_UNAVAILABLE, msg.clone())
             }
             AppError::Internal(err) => {
                 tracing::error!("Internal error: {:?}", err);

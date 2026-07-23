@@ -11,7 +11,13 @@ use axum::{
     Extension, Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
+use tower_http::timeout::TimeoutLayer;
 use uuid::Uuid;
+
+/// Default per-request timeout applied when [`create_router`] is used without an
+/// explicit value. Kept in sync with [`crate::config::AppConfig`]'s default.
+pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub mod auth;
 pub mod middleware;
@@ -94,6 +100,22 @@ pub struct HealthResponse {
 /// signature; when `None`, verification is disabled entirely (intended only for
 /// local development — see `main`, which warns loudly in that case).
 pub fn create_router(db: Option<Database>, verifier: Option<SignatureVerifier>) -> Router {
+    create_router_with_timeout(db, verifier, DEFAULT_REQUEST_TIMEOUT)
+}
+
+/// Like [`create_router`], but with an explicit per-request timeout.
+///
+/// The [`TimeoutLayer`] is the outermost application layer (added last, so it
+/// wraps everything): if any handler — or a downstream dependency it is waiting
+/// on — fails to produce a response within `request_timeout`, the request is
+/// aborted and the client receives `408 Request Timeout` instead of hanging.
+/// This is what prevents a single stalled bridge/database call from tying up a
+/// connection forever.
+pub fn create_router_with_timeout(
+    db: Option<Database>,
+    verifier: Option<SignatureVerifier>,
+    request_timeout: Duration,
+) -> Router {
     let router = Router::new()
         .route("/api/v1/health", get(health_handler))
         .route(
@@ -109,13 +131,17 @@ pub fn create_router(db: Option<Database>, verifier: Option<SignatureVerifier>) 
 
     // The signature layer is added last so it runs *first* — verification
     // happens before any handler (or its body extractor) sees the request.
-    match verifier {
+    let router = match verifier {
         Some(verifier) => router.layer(axum::middleware::from_fn_with_state(
             verifier,
             auth::verify_signature,
         )),
         None => router,
-    }
+    };
+
+    // Timeout is the outermost layer so it also bounds the auth middleware and
+    // body extraction, not just the leaf handler.
+    router.layer(TimeoutLayer::new(request_timeout))
 }
 
 async fn health_handler() -> Json<HealthResponse> {
@@ -316,9 +342,32 @@ async fn execute_route_handler(
         payload.anchor_transaction_id.as_deref(),
     )
     .await
-    .map_err(|e| AppError::BadRequest(format!("Route execution failed: {}", e)))?;
+    .map_err(map_route_execution_error)?;
 
     Ok(Json(result))
+}
+
+/// Classifies an error from [`RouteExecutionService::execute_route_with_quota`]
+/// into the correct HTTP-facing [`AppError`].
+///
+/// Connection-pool starvation (`PoolTimedOut`) and a closed pool
+/// (`PoolClosed`) are infrastructure problems, not client mistakes: under a
+/// Postgres outage or a connection storm the pool's `acquire_timeout` fires and
+/// we must surface `503 Service Unavailable` so the request fails fast and the
+/// caller retries, instead of masquerading as a `400` or blocking the client.
+/// Everything else (quota exceeded, bad references, etc.) remains a `400`.
+pub(crate) fn map_route_execution_error(err: Box<dyn std::error::Error>) -> AppError {
+    if let Some(sqlx_err) = err.downcast_ref::<sqlx::Error>() {
+        if matches!(
+            sqlx_err,
+            sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed
+        ) {
+            return AppError::ServiceUnavailable(
+                "Database connection pool exhausted; please retry shortly".to_string(),
+            );
+        }
+    }
+    AppError::BadRequest(format!("Route execution failed: {}", err))
 }
 
 #[cfg(test)]
