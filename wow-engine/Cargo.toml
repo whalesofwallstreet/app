@@ -26,6 +26,7 @@ sqlx = { version = "0.7", features = ["postgres", "runtime-tokio-native-tls", "u
 ed25519-dalek = "2.1.1"
 sha2 = "0.10.8"
 hex = "0.4.3"
+xxhash-rust = { version = "0.8.18", features = ["xxh3"] }
 
 [dev-dependencies]
 axum-test = "16"
