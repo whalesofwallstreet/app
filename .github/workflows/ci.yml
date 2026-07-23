@@ -2,13 +2,13 @@ name: Wow Engine CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
     paths:
-      - 'wow-engine/**'
+      - "wow-engine/**"
   pull_request:
-    branches: [ main ]
+    branches: [main]
     paths:
-      - 'wow-engine/**'
+      - "wow-engine/**"
 
 jobs:
   test:

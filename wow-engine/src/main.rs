@@ -93,7 +93,9 @@ async fn main() -> anyhow::Result<()> {
 
     // 4. Bind TCP listener on configured port
     let port = config.port;
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    // Bind all container interfaces so the published Docker port can reach the
+    // service. The container still runs as the unprivileged `nonroot` user.
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
     tracing::info!("Wow Engine is booting up and routing pipeline conversions...");

@@ -4,6 +4,7 @@ use crate::db::models::RouteExecutionInput;
 use crate::db::service::{ExecuteRouteResult, RouteExecutionService};
 use crate::db::Database;
 use crate::error::AppError;
+use crate::router::slippage::SlippageError;
 use crate::router::{RouteOption, RoutePlanner};
 use axum::{
     routing::{get, post},
@@ -19,9 +20,17 @@ use uuid::Uuid;
 pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub mod auth;
+pub mod middleware;
 pub mod validation;
 use auth::SignatureVerifier;
 use validation::{validate_asset_code, validate_stellar_address};
+
+#[derive(Serialize)]
+pub struct ConfigResponse {
+    pub chains: Vec<&'static str>,
+    pub assets: Vec<&'static str>,
+    pub bridges: Vec<&'static str>,
+}
 
 #[derive(Deserialize, Debug)]
 pub struct QuoteRequest {
@@ -109,6 +118,10 @@ pub fn create_router_with_timeout(
 ) -> Router {
     let router = Router::new()
         .route("/api/v1/health", get(health_handler))
+        .route(
+            "/api/v1/config",
+            get(config_handler).layer(axum::middleware::from_fn(middleware::etag_middleware)),
+        )
         .route("/api/v1/quote", post(quote_handler))
         .route("/api/v1/execute-route", post(execute_route_handler))
         .route("/api/v1/anchor/deposit", post(deposit_handler))
@@ -140,6 +153,14 @@ async fn health_handler() -> Json<HealthResponse> {
     })
 }
 
+async fn config_handler() -> Json<ConfigResponse> {
+    Json(ConfigResponse {
+        chains: vec!["Ethereum", "Arbitrum", "Solana", "Stellar"],
+        assets: vec!["ETH", "USDC", "SOL", "XLM"],
+        bridges: vec!["deBridge", "CCTP"],
+    })
+}
+
 #[tracing::instrument(err)]
 async fn quote_handler(Json(payload): Json<QuoteRequest>) -> Result<Json<QuoteResponse>, AppError> {
     if payload.source_asset.trim().is_empty() {
@@ -167,7 +188,17 @@ async fn quote_handler(Json(payload): Json<QuoteRequest>) -> Result<Json<QuoteRe
             &payload.dest_asset,
             payload.amount_in,
         )
-        .await?;
+        .await
+        .map_err(|err| {
+            // A catastrophic price-impact rejection is a property of the
+            // requested trade, not an engine failure: report it as a 400
+            // with the explanatory message.
+            if err.downcast_ref::<SlippageError>().is_some() {
+                AppError::BadRequest(err.to_string())
+            } else {
+                AppError::Internal(err)
+            }
+        })?;
     Ok(Json(QuoteResponse { routes }))
 }
 

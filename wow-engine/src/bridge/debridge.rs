@@ -2,18 +2,34 @@ use crate::bridge::gas_oracle::GasOracle;
 use crate::bridge::{BridgeProvider, BridgeQuote, Chain};
 use reqwest_middleware::ClientWithMiddleware;
 use std::sync::Arc;
+use tokio::time::{timeout, Duration};
 
 pub struct DeBridgeClient {
     #[allow(dead_code)]
-    client: ClientWithMiddleware,
+    client: Option<ClientWithMiddleware>,
     oracle: Arc<GasOracle>,
+}
+
+impl Drop for DeBridgeClient {
+    fn drop(&mut self) {
+        if let Some(client) = self.client.take() {
+            tokio::spawn(async move {
+                let _ = timeout(Duration::from_secs(5), async move {
+                    drop(client);
+                })
+                .await;
+            });
+        }
+    }
 }
 
 impl DeBridgeClient {
     pub fn new(oracle: Arc<GasOracle>) -> Self {
         Self {
-            client: crate::http_client::build_resilient_client()
-                .expect("Failed to build resilient HTTP client"),
+            client: Some(
+                crate::http_client::build_resilient_client()
+                    .expect("Failed to build resilient HTTP client"),
+            ),
             oracle,
         }
     }
@@ -63,5 +79,22 @@ impl BridgeProvider for DeBridgeClient {
             duration_seconds,
             execution_payload: Some(payload),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_debridge_client_async_drop() {
+        let oracle = Arc::new(GasOracle::new());
+        let client = DeBridgeClient::new(oracle);
+
+        // Explicitly drop to trigger the Drop implementation
+        drop(client);
+
+        // Give the spawned task a moment to execute
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
