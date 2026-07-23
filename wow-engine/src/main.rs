@@ -83,8 +83,11 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    // 3. Initialize API router with CORS enabled for seamless frontend calls
-    let app = wow_engine::api::create_router(db, verifier)
+    // 3. Initialize API router with CORS enabled for seamless frontend calls.
+    //    A per-request timeout (configurable via REQUEST_TIMEOUT_SECS) guards
+    //    against any single request hanging on a stalled downstream dependency.
+    let request_timeout = std::time::Duration::from_secs(config.request_timeout_secs);
+    let app = wow_engine::api::create_router_with_timeout(db, verifier, request_timeout)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http());
 
