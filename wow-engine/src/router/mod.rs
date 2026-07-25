@@ -99,6 +99,7 @@ impl RoutePlanner {
         source_asset: &str,
         dest_asset: &str,
         amount_in: u64,
+        multi_path: bool,
     ) -> Result<Vec<RouteOption>, anyhow::Error> {
         let start_node = Node {
             chain: source_chain,
@@ -197,8 +198,10 @@ impl RoutePlanner {
                             let next_usd_scaled = (next_usd * 1000.0) as u64;
 
                             let best = best_seen.entry(next_node.clone()).or_insert(0);
-                            if next_usd_scaled > *best {
-                                *best = next_usd_scaled;
+                            if multi_path || next_usd_scaled > *best {
+                                if next_usd_scaled > *best {
+                                    *best = next_usd_scaled;
+                                }
                                 let mut new_route = state.route_so_far.clone();
                                 new_route.push(RouteOption {
                                     provider: quote.provider,
@@ -266,8 +269,10 @@ impl RoutePlanner {
                             };
 
                             let best = best_seen.entry(next_node.clone()).or_insert(0);
-                            if next_usd_scaled > *best {
-                                *best = next_usd_scaled;
+                            if multi_path || next_usd_scaled > *best {
+                                if next_usd_scaled > *best {
+                                    *best = next_usd_scaled;
+                                }
                                 let mut new_route = state.route_so_far.clone();
                                 new_route.push(RouteOption {
                                     provider: quote.provider.clone(),
@@ -317,8 +322,10 @@ impl RoutePlanner {
                         };
 
                         let best = best_seen.entry(next_node.clone()).or_insert(0);
-                        if next_usd_scaled > *best {
-                            *best = next_usd_scaled;
+                        if multi_path || next_usd_scaled > *best {
+                            if next_usd_scaled > *best {
+                                *best = next_usd_scaled;
+                            }
                             let mut new_route = state.route_so_far.clone();
                             new_route.push(RouteOption {
                                 provider: quote.provider.clone(),
@@ -374,7 +381,7 @@ mod tests {
     async fn test_find_best_route_usdc() {
         let planner = RoutePlanner::new();
         let routes = planner
-            .find_best_route(Chain::Solana, Chain::Stellar, "USDC", "USDC", 10000)
+            .find_best_route(Chain::Solana, Chain::Stellar, "USDC", "USDC", 10000, false)
             .await
             .unwrap();
 
@@ -398,6 +405,7 @@ mod tests {
                 "ETH",
                 "XLM",
                 1, // 1 ETH
+                false,
             )
             .await
             .unwrap();
@@ -413,7 +421,7 @@ mod tests {
     async fn test_route_exposes_dynamic_slippage() {
         let planner = RoutePlanner::new();
         let routes = planner
-            .find_best_route(Chain::Ethereum, Chain::Ethereum, "ETH", "USDC", 10)
+            .find_best_route(Chain::Ethereum, Chain::Ethereum, "ETH", "USDC", 10, false)
             .await
             .unwrap();
 
@@ -431,7 +439,7 @@ mod tests {
         // 60,000 ETH (~$180M) dwarfs every pool in the graph; all swap legs
         // are rejected for catastrophic price impact and no route exists.
         let err = planner
-            .find_best_route(Chain::Ethereum, Chain::Ethereum, "ETH", "USDC", 60_000)
+            .find_best_route(Chain::Ethereum, Chain::Ethereum, "ETH", "USDC", 60_000, false)
             .await
             .unwrap_err();
 

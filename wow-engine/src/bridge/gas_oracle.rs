@@ -46,6 +46,10 @@ impl GasOracle {
     }
 
     async fn fetch_from_api(&self, chain: Chain) -> Result<f64, std::sync::Arc<anyhow::Error>> {
+        if std::env::var("MOCK_GAS_ORACLE").is_ok() {
+            return Ok(Self::fallback_fee(chain));
+        }
+
         info!(
             "Fetching real-time gas fee from external REST API for {:?}",
             chain

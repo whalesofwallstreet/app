@@ -97,3 +97,62 @@ jobs:
 
       - name: Run chaos suite
         run: cargo test --test chaos_tests
+
+  benchmark:
+    name: Continuous Benchmarking
+    runs-on: ubuntu-24.04
+    needs: test
+    permissions:
+      pull-requests: write
+      contents: write
+    defaults:
+      run:
+        working-directory: wow-engine
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: wow-engine
+
+      - name: Create cache directory
+        run: mkdir -p ../cache
+
+      - name: Download previous benchmark data
+        uses: actions/cache/restore@v4
+        with:
+          path: ./cache
+          key: ${{ runner.os }}-benchmark-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-benchmark-
+
+      - name: Run Benchmarks
+        run: |
+          cargo bench --bench router_benchmarks -- --output-format bencher | tee benchmark_result.txt
+        env:
+          MOCK_GAS_ORACLE: "true"
+
+      - name: Store benchmark result
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: Whales of Wall Street Router Benchmarks
+          tool: 'cargo'
+          output-file-path: wow-engine/benchmark_result.txt
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          comment-always: true
+          fail-on-alert: true
+          alert-threshold: '105%'
+          external-data-json-path: ./cache/benchmark-data.json
+
+      - name: Save benchmark data
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: ./cache
+          key: ${{ runner.os }}-benchmark-${{ github.run_id }}
+
