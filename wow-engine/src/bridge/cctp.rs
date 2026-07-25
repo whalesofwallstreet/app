@@ -1,5 +1,9 @@
+use crate::bridge::attestation::{
+    cctp_domain, AttestationError, AttestationVerifier, CctpMessage, FileNonceStore, RpcKeySource,
+};
 use crate::bridge::gas_oracle::GasOracle;
 use crate::bridge::{BridgeProvider, BridgeQuote, Chain};
+use crate::config::AppConfig;
 use reqwest_middleware::ClientWithMiddleware;
 use std::sync::Arc;
 
@@ -7,15 +11,45 @@ pub struct CctpClient {
     #[allow(dead_code)]
     client: ClientWithMiddleware,
     oracle: Arc<GasOracle>,
+    verifier: AttestationVerifier<RpcKeySource>,
 }
 
 impl CctpClient {
     pub fn new(oracle: Arc<GasOracle>) -> Self {
-        Self {
-            client: crate::http_client::build_resilient_client()
+        let config = AppConfig::load().unwrap_or_default();
+        let client = crate::http_client::build_resilient_client()
+            .expect("Failed to build resilient HTTP client");
+        let key_source = RpcKeySource::new(
+            crate::http_client::build_resilient_client()
                 .expect("Failed to build resilient HTTP client"),
+            config.eth_rpc_url,
+            config.cctp_message_transmitter,
+        );
+        let nonce_store = FileNonceStore::open(&config.cctp_nonce_store_path)
+            .expect("Failed to open durable CCTP nonce store");
+        Self {
+            client,
             oracle,
+            verifier: AttestationVerifier::new(key_source, Box::new(nonce_store)),
         }
+    }
+
+    /// Cryptographically verifies a CCTP attestation locally instead of
+    /// trusting Circle's centralized attestation API. The expected
+    /// destination domain is derived from the destination chain of this
+    /// request. The mint transaction must not be submitted unless this
+    /// returns `Ok`; the `/api/v1/cctp/verify-attestation` endpoint is the
+    /// gate executors call before proceeding with a bridge leg quoted by
+    /// [`BridgeProvider::get_quote`].
+    pub async fn verify_attestation(
+        &self,
+        dest_chain: Chain,
+        message: &[u8],
+        attestation: &[u8],
+    ) -> Result<CctpMessage, AttestationError> {
+        self.verifier
+            .verify(message, attestation, cctp_domain(dest_chain))
+            .await
     }
 }
 

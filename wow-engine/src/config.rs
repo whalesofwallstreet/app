@@ -22,6 +22,16 @@ pub struct AppConfig {
     /// layer; this guarantees a request can never outlive it.
     #[serde(default = "default_request_timeout_secs")]
     pub request_timeout_secs: u64,
+    /// JSON-RPC endpoint used to read Circle CCTP attester keys on-chain.
+    #[serde(default = "default_eth_rpc_url")]
+    pub eth_rpc_url: String,
+    /// Address of Circle's `MessageTransmitter` contract on the source chain.
+    #[serde(default = "default_cctp_message_transmitter")]
+    pub cctp_message_transmitter: String,
+    /// Path of the append-only log recording consumed CCTP nonces, so
+    /// replay protection survives restarts and redeploys.
+    #[serde(default = "default_cctp_nonce_store_path")]
+    pub cctp_nonce_store_path: String,
 }
 
 fn default_port() -> u16 {
@@ -30,6 +40,33 @@ fn default_port() -> u16 {
 
 fn default_request_timeout_secs() -> u64 {
     30
+}
+
+fn default_eth_rpc_url() -> String {
+    "https://ethereum-rpc.publicnode.com".to_string()
+}
+
+fn default_cctp_message_transmitter() -> String {
+    // Circle MessageTransmitter on Ethereum mainnet.
+    "0x0a992d191deec32afe36203ad87d7d289a738f81".to_string()
+}
+
+fn default_cctp_nonce_store_path() -> String {
+    "data/cctp_consumed_nonces.log".to_string()
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            port: default_port(),
+            database_url: None,
+            signing_public_key: None,
+            request_timeout_secs: default_request_timeout_secs(),
+            eth_rpc_url: default_eth_rpc_url(),
+            cctp_message_transmitter: default_cctp_message_transmitter(),
+            cctp_nonce_store_path: default_cctp_nonce_store_path(),
+        }
+    }
 }
 
 impl AppConfig {
