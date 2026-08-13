@@ -449,4 +449,28 @@ mod tests {
         );
         assert!(err.to_string().contains("exceeds the maximum"));
     }
+
+    #[tokio::test]
+    async fn test_multi_path_explores_more_routes() {
+        let planner = RoutePlanner::new();
+        // Single-path Dijkstra routing
+        let single_path = planner
+            .find_best_route(Chain::Solana, Chain::Stellar, "USDC", "USDC", 10_000_000, false)
+            .await
+            .unwrap();
+
+        // Multi-path routing explores more options
+        let multi_path = planner
+            .find_best_route(Chain::Solana, Chain::Stellar, "USDC", "USDC", 10_000_000, true)
+            .await
+            .unwrap();
+
+        // Multi-path should explore more routes (often exploring up to 5)
+        assert!(
+            multi_path.len() > single_path.len(),
+            "multi_path should find more routes than single_path: {} vs {}",
+            multi_path.len(),
+            single_path.len()
+        );
+    }
 }
