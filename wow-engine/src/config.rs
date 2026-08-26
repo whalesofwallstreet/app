@@ -76,6 +76,17 @@ pub struct AppConfig {
     /// When empty, CORS is fully permissive (local-dev mode).
     #[serde(default)]
     pub allowed_cors_origins: Vec<String>,
+
+    // ── Rate limiting ───────────────────────────────────────────────
+    /// Per-IP request budget, per 60-second window, applied to every route.
+    #[serde(default = "default_rate_limit_global_per_minute")]
+    pub rate_limit_global_per_minute: u32,
+    /// Per-IP request budget, per 60-second window, applied specifically to
+    /// `/api/v1/quote` on top of the global budget above — it runs a
+    /// non-trivial pathfinding search per request, so it gets a stricter
+    /// limit.
+    #[serde(default = "default_rate_limit_quote_per_minute")]
+    pub rate_limit_quote_per_minute: u32,
 }
 
 fn default_port() -> u16 {
@@ -97,6 +108,14 @@ fn default_cctp_message_transmitter() -> String {
 
 fn default_cctp_nonce_store_path() -> String {
     "data/cctp_consumed_nonces.log".to_string()
+}
+
+fn default_rate_limit_global_per_minute() -> u32 {
+    300
+}
+
+fn default_rate_limit_quote_per_minute() -> u32 {
+    30
 }
 
 fn default_allowed_anchor_domains() -> HashSet<String> {
@@ -126,6 +145,8 @@ impl Default for AppConfig {
             arbiscan_api_key: None,
             allowed_anchor_domains: default_allowed_anchor_domains(),
             allowed_cors_origins: Vec::new(),
+            rate_limit_global_per_minute: default_rate_limit_global_per_minute(),
+            rate_limit_quote_per_minute: default_rate_limit_quote_per_minute(),
         }
     }
 }

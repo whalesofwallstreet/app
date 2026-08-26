@@ -23,9 +23,12 @@ use tower_http::timeout::TimeoutLayer;
 use uuid::Uuid;
 
 pub mod auth;
+pub mod cors;
 pub mod middleware;
+pub mod rate_limit;
 pub mod validation;
 use auth::SignatureVerifier;
+use rate_limit::RateLimiter;
 use validation::{validate_asset_code, validate_stellar_address};
 
 #[derive(Deserialize, Debug)]
@@ -137,6 +140,7 @@ pub fn create_router(db: Option<Database>, verifier: Option<SignatureVerifier>) 
         Duration::from_secs(30),
         ClusterCache::local_only(),
         Arc::new(AppConfig::default()),
+        Arc::new(Sep38Client::new()),
     )
 }
 
@@ -147,14 +151,29 @@ pub fn create_router_with_cache(
     request_timeout: Duration,
     cache: ClusterCache,
     config: Arc<AppConfig>,
+    sep38_client: Arc<Sep38Client>,
 ) -> Router {
+    // Every route shares a global per-IP budget; `/api/v1/quote` additionally
+    // gets its own, stricter budget since it runs a non-trivial pathfinding
+    // search per request.
+    let quote_limiter =
+        RateLimiter::new(config.rate_limit_quote_per_minute, Duration::from_secs(60));
+    let global_limiter =
+        RateLimiter::new(config.rate_limit_global_per_minute, Duration::from_secs(60));
+
     let router = Router::new()
         .route("/api/v1/health", get(health_handler))
         .route(
             "/api/v1/config",
             get(config_handler).layer(axum::middleware::from_fn(middleware::etag_middleware)),
         )
-        .route("/api/v1/quote", post(quote_handler))
+        .route(
+            "/api/v1/quote",
+            post(quote_handler).layer(axum::middleware::from_fn_with_state(
+                quote_limiter,
+                rate_limit::rate_limit_middleware,
+            )),
+        )
         .route("/api/v1/execute-route", post(execute_route_handler))
         .route("/api/v1/anchor/deposit", post(deposit_handler))
         .route("/api/v1/anchor/withdraw", post(withdraw_handler))
@@ -170,7 +189,12 @@ pub fn create_router_with_cache(
         .layer(Extension(db))
         .layer(Extension(cache))
         .layer(Extension(config))
-        .layer(Extension(tracker));
+        .layer(Extension(tracker))
+        .layer(Extension(sep38_client))
+        .layer(axum::middleware::from_fn_with_state(
+            global_limiter,
+            rate_limit::rate_limit_middleware,
+        ));
 
     // The signature layer is added last so it runs *first* — verification
     // happens before any handler (or its body extractor) sees the request.
@@ -313,8 +337,9 @@ async fn withdraw_handler(
     Ok(Json(tx))
 }
 
-#[tracing::instrument(err)]
+#[tracing::instrument(skip(client), err)]
 async fn anchor_quote_handler(
+    Extension(client): Extension<Arc<Sep38Client>>,
     Json(payload): Json<AnchorQuoteRequest>,
 ) -> Result<Json<Sep38Quote>, AppError> {
     if let Err(err) = validate_asset_code(&payload.sell_asset) {
@@ -334,7 +359,6 @@ async fn anchor_quote_handler(
         ));
     }
 
-    let client = Sep38Client::new();
     let quote = client
         .get_indicative_quote(
             &payload.anchor_domain,

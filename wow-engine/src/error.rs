@@ -1,5 +1,5 @@
 use axum::{
-    http::StatusCode,
+    http::{header, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -28,12 +28,20 @@ pub enum AppError {
     #[error("Service Unavailable: {0}")]
     ServiceUnavailable(String),
 
+    /// The caller has exceeded its per-IP request budget. Carries the number
+    /// of seconds until the caller may retry, surfaced as a `Retry-After`
+    /// header rather than a generic Axum default.
+    #[error("Too Many Requests")]
+    TooManyRequests(u64),
+
     #[error("Internal Server Error")]
     Internal(#[from] anyhow::Error),
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
+        let mut retry_after_secs = None;
+
         let (status, err_msg) = match self {
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
             AppError::Unauthorized(msg) => {
@@ -46,6 +54,13 @@ impl IntoResponse for AppError {
                 tracing::warn!("Service unavailable: {msg}");
                 (StatusCode::SERVICE_UNAVAILABLE, msg)
             }
+            AppError::TooManyRequests(secs) => {
+                retry_after_secs = Some(secs);
+                (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "Too many requests".to_string(),
+                )
+            }
             AppError::Internal(err) => {
                 tracing::error!("Internal error: {:?}", err);
                 (
@@ -56,6 +71,14 @@ impl IntoResponse for AppError {
         };
 
         let body = Json(ErrorResponse { error: err_msg });
-        (status, body).into_response()
+        let mut response = (status, body).into_response();
+
+        if let Some(secs) = retry_after_secs {
+            if let Ok(value) = header::HeaderValue::from_str(&secs.to_string()) {
+                response.headers_mut().insert(header::RETRY_AFTER, value);
+            }
+        }
+
+        response
     }
 }

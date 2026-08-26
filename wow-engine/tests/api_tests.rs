@@ -219,11 +219,33 @@ async fn test_anchor_quote_invalid_amount() {
 async fn test_anchor_quote_endpoint_success() {
     // Sep38Client is stateless (no DB dependency), so this success path
     // runs unconditionally, unlike the deposit/withdraw success tests below.
-    let app = create_router(None, None);
+    //
+    // The handler now sources its price from a live call to the anchor's
+    // SEP-38 `/price` endpoint (see issue #51), so this points the request
+    // at a mock anchor rather than asserting a hardcoded literal.
+    let mock_anchor = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/sep38/price"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({ "price": "1500.0000000" })),
+        )
+        .mount(&mock_anchor)
+        .await;
+
+    let app = create_router_with_cache(
+        None,
+        None,
+        None,
+        std::time::Duration::from_secs(30),
+        wow_engine::cache_sync::ClusterCache::local_only(),
+        std::sync::Arc::new(wow_engine::config::AppConfig::default()),
+        std::sync::Arc::new(wow_engine::anchor::sep38::Sep38Client::new()),
+    );
     let server = TestServer::new(app).unwrap();
 
     let payload = json!({
-        "anchor_domain": "test.com",
+        "anchor_domain": mock_anchor.uri(),
         "sell_asset": "USDC",
         "buy_asset": "NGN",
         "sell_amount": 100.0
@@ -235,7 +257,8 @@ async fn test_anchor_quote_endpoint_success() {
     let body: serde_json::Value = response.json();
     assert_eq!(body["sell_asset"], "USDC");
     assert_eq!(body["buy_asset"], "NGN");
-    assert_eq!(body["price"], "1450.0000000");
+    assert_eq!(body["price"], "1500.0000000");
+    assert_eq!(body["buy_amount"], "150000.0000000");
     assert!(body["id"].as_str().unwrap().starts_with("q_sep38_"));
 }
 
@@ -248,6 +271,7 @@ mod anchor_deposit_withdraw_success {
     use super::*;
     use std::sync::Arc;
     use std::time::Duration;
+    use wow_engine::anchor::sep38::Sep38Client;
     use wow_engine::anchor::tracker::TrackerStore;
     use wow_engine::cache_sync::ClusterCache;
     use wow_engine::config::AppConfig;
@@ -276,6 +300,7 @@ mod anchor_deposit_withdraw_success {
             Duration::from_secs(30),
             ClusterCache::local_only(),
             Arc::new(AppConfig::default()),
+            Arc::new(Sep38Client::new()),
         ))
     }
 
