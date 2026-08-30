@@ -460,11 +460,12 @@ async fn deposit_handler(
     if let Err(err) = validate_asset_code(&payload.asset_code) {
         return Err(AppError::BadRequest(format!("Invalid asset code: {}", err)));
     }
-    if payload.anchor_domain.trim().is_empty() {
-        return Err(AppError::BadRequest(
-            "Anchor domain cannot be empty".to_string(),
-        ));
-    }
+    // Sep24Client::initiate_deposit makes live outbound HTTP requests to
+    // this domain (the SEP-10 challenge fetch/exchange, then the
+    // interactive-endpoint POST) — same SSRF guard as anchor_quote_handler.
+    let anchor_domain =
+        validate_anchor_domain(&payload.anchor_domain, &config.allowed_anchor_domains)
+            .map_err(AppError::BadRequest)?;
 
     let tracker = tracker.0.ok_or_else(|| {
         AppError::Internal(anyhow::anyhow!(
@@ -480,11 +481,7 @@ async fn deposit_handler(
     )
     .map_err(AppError::Internal)?;
     let tx = client
-        .initiate_deposit(
-            &payload.anchor_domain,
-            &payload.asset_code,
-            &payload.account,
-        )
+        .initiate_deposit(&anchor_domain, &payload.asset_code, &payload.account)
         .await?;
     Ok(Json(tx))
 }
@@ -504,11 +501,12 @@ async fn withdraw_handler(
     if let Err(err) = validate_asset_code(&payload.asset_code) {
         return Err(AppError::BadRequest(format!("Invalid asset code: {}", err)));
     }
-    if payload.anchor_domain.trim().is_empty() {
-        return Err(AppError::BadRequest(
-            "Anchor domain cannot be empty".to_string(),
-        ));
-    }
+    // Sep24Client::initiate_withdrawal makes live outbound HTTP requests to
+    // this domain (the SEP-10 challenge fetch/exchange, then the
+    // interactive-endpoint POST) — same SSRF guard as anchor_quote_handler.
+    let anchor_domain =
+        validate_anchor_domain(&payload.anchor_domain, &config.allowed_anchor_domains)
+            .map_err(AppError::BadRequest)?;
 
     let tracker = tracker.0.ok_or_else(|| {
         AppError::Internal(anyhow::anyhow!(
@@ -524,11 +522,7 @@ async fn withdraw_handler(
     )
     .map_err(AppError::Internal)?;
     let tx = client
-        .initiate_withdrawal(
-            &payload.anchor_domain,
-            &payload.asset_code,
-            &payload.account,
-        )
+        .initiate_withdrawal(&anchor_domain, &payload.asset_code, &payload.account)
         .await?;
     Ok(Json(tx))
 }

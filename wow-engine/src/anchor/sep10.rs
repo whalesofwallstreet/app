@@ -483,6 +483,7 @@ pub struct ParsedChallenge {
 pub fn parse_and_validate_challenge(
     xdr_b64: &str,
     expected_client_account: &[u8; 32],
+    anchor_domain: &str,
     network_passphrase: &str,
     now_unix_secs: i64,
     max_age_secs: i64,
@@ -528,9 +529,20 @@ pub fn parse_and_validate_challenge(
         ));
     }
 
+    // This is SEP-10's core anti-phishing guarantee: the client-sourced
+    // ManageData op's key must be exactly "<anchor_domain> auth". Without
+    // this, a challenge issued by (or relayed through) one anchor could be
+    // used to authenticate against a different one — checking only the
+    // signature and the account, with no binding to which domain the
+    // challenge actually names, verifies "some anchor signed something for
+    // this account", not "this anchor issued this challenge for itself".
+    // There is deliberately no fallback that accepts a client-sourced op
+    // with the wrong key: that would silently defeat this check for any
+    // challenge that fails it.
+    let expected_key = format!("{anchor_domain} auth");
     let mut found_client_account = None;
     for op in &tx.operations {
-        let (_md_key, md_value, op_source) = match &op.body {
+        let (md_key, md_value, op_source) = match &op.body {
             OperationBody::ManageData(md) => (
                 &md.key,
                 &md.value,
@@ -540,31 +552,20 @@ pub fn parse_and_validate_challenge(
                     .unwrap_or(anchor_account),
             ),
         };
-        let op_source_arr = op_source;
-        if op_source_arr == *expected_client_account {
+        if op_source == *expected_client_account && md_key == &expected_key {
             if let Some(value) = md_value {
                 if value.len() == 48 || value.len() == 32 || value.len() == 64 {
-                    found_client_account = Some(op_source_arr);
+                    found_client_account = Some(op_source);
                 }
             }
         }
     }
 
-    if found_client_account.is_none() {
-        for op in &tx.operations {
-            let op_source = op
-                .source_account
-                .as_ref()
-                .map(muxed_account_bytes)
-                .unwrap_or(anchor_account);
-            if op_source == *expected_client_account {
-                found_client_account = Some(op_source);
-            }
-        }
-    }
-
     let client_account = found_client_account.ok_or_else(|| {
-        bad_request("SEP-10 challenge missing ManageData op with client account as source")
+        bad_request(format!(
+            "SEP-10 challenge missing a ManageData op sourced by the client account \
+             with key '{expected_key}'"
+        ))
     })?;
 
     if client_account != *expected_client_account {
@@ -609,32 +610,41 @@ pub fn parse_and_validate_challenge(
 pub fn sign_challenge_transaction(
     xdr_b64: &str,
     signing_key: &SigningKey,
+    network_passphrase: &str,
 ) -> Result<String, AppError> {
     let mut env = decode_transaction_envelope(xdr_b64)?;
     let public_key: [u8; 32] = signing_key.verifying_key().to_bytes();
     let hint = signature_hint(&public_key);
-    let tx_hash = transaction_hash(STELLAR_PUBLIC_NETWORK_PASSPHRASE, &env.tx);
-    let testnet_hash = transaction_hash(STELLAR_TESTNET_PASSPHRASE, &env.tx);
-    let sig_public = signing_key.sign(&tx_hash);
-    let sig_testnet = signing_key.sign(&testnet_hash);
-    for net_hash in [tx_hash, testnet_hash].iter() {
-        for ds in &env.signatures {
-            if ds.hint == hint && ds.signature.len() == 64 {
-                let sig_arr: [u8; 64] = ds.signature.as_slice().try_into().unwrap();
-                let sig = Signature::from_bytes(&sig_arr);
-                if let Ok(vk) = VerifyingKey::from_bytes(&public_key) {
-                    if vk.verify_strict(net_hash, &sig).is_ok() {
-                        return Ok(encode_transaction_envelope(&env));
-                    }
-                }
-            }
-        }
-    }
-    env.signatures.push(DecoratedSignature {
-        hint,
-        signature: sig_public.to_bytes().to_vec(),
+    // Must match whatever network `parse_and_validate_challenge` verified
+    // the anchor's own signature against (see `resolve_network_passphrase`
+    // in `authenticate`) — signing against the wrong network ID produces a
+    // signature the anchor's own verification will reject, since it hashes
+    // the transaction differently per network.
+    let tx_hash = transaction_hash(network_passphrase, &env.tx);
+    let sig = signing_key.sign(&tx_hash);
+
+    // If we already hold a signature from this key that verifies against
+    // this exact hash (e.g. the anchor pre-signed on our behalf, or this
+    // function runs twice on the same challenge), don't append a duplicate.
+    let already_signed = env.signatures.iter().any(|ds| {
+        ds.hint == hint
+            && ds.signature.len() == 64
+            && ds
+                .signature
+                .as_slice()
+                .try_into()
+                .ok()
+                .map(|sig_arr: [u8; 64]| Signature::from_bytes(&sig_arr))
+                .zip(VerifyingKey::from_bytes(&public_key).ok())
+                .is_some_and(|(sig, vk)| vk.verify_strict(&tx_hash, &sig).is_ok())
     });
-    let _ = sig_testnet;
+
+    if !already_signed {
+        env.signatures.push(DecoratedSignature {
+            hint,
+            signature: sig.to_bytes().to_vec(),
+        });
+    }
     Ok(encode_transaction_envelope(&env))
 }
 
@@ -789,13 +799,14 @@ impl Sep10Client {
         let _ = parse_and_validate_challenge(
             &challenge.transaction,
             &account_pk_bytes,
+            anchor_domain,
             &passphrase,
             now,
             self.challenge_max_age_secs,
             self.challenge_max_future_skew_secs,
         )?;
 
-        let signed_tx = sign_challenge_transaction(&challenge.transaction, key)?;
+        let signed_tx = sign_challenge_transaction(&challenge.transaction, key, &passphrase)?;
 
         let token_req = serde_json::json!({
             "transaction": signed_tx
@@ -894,6 +905,7 @@ mod tests {
         let parsed = parse_and_validate_challenge(
             &xdr,
             &client_pk,
+            "test.com",
             STELLAR_PUBLIC_NETWORK_PASSPHRASE,
             now,
             300,
@@ -913,6 +925,7 @@ mod tests {
         let err = parse_and_validate_challenge(
             &xdr,
             &client_pk,
+            "test.com",
             STELLAR_PUBLIC_NETWORK_PASSPHRASE,
             now,
             300,
@@ -931,6 +944,7 @@ mod tests {
         let err = parse_and_validate_challenge(
             &xdr,
             &client_pk,
+            "test.com",
             STELLAR_PUBLIC_NETWORK_PASSPHRASE,
             now,
             300,
@@ -958,6 +972,7 @@ mod tests {
         let err = parse_and_validate_challenge(
             &xdr,
             &client_pk,
+            "test.com",
             STELLAR_PUBLIC_NETWORK_PASSPHRASE,
             now,
             300,
@@ -1001,6 +1016,7 @@ mod tests {
         let err = parse_and_validate_challenge(
             &xdr,
             &client_pk,
+            "test.com",
             STELLAR_PUBLIC_NETWORK_PASSPHRASE,
             now,
             300,
@@ -1021,6 +1037,7 @@ mod tests {
         let err = parse_and_validate_challenge(
             &xdr,
             &client_pk,
+            "test.com",
             STELLAR_PUBLIC_NETWORK_PASSPHRASE,
             now,
             300,
@@ -1047,6 +1064,7 @@ mod tests {
         let err = parse_and_validate_challenge(
             &xdr,
             &client_pk,
+            "test.com",
             STELLAR_PUBLIC_NETWORK_PASSPHRASE,
             now,
             300,
@@ -1066,6 +1084,7 @@ mod tests {
         let err = parse_and_validate_challenge(
             &xdr,
             &other_pk,
+            "test.com",
             STELLAR_PUBLIC_NETWORK_PASSPHRASE,
             now,
             300,
@@ -1076,12 +1095,154 @@ mod tests {
     }
 
     #[test]
+    fn challenge_with_wrong_domain_key_is_rejected() {
+        // The core anti-phishing check: a challenge whose ManageData key
+        // names a different domain than the one we're actually
+        // authenticating against must be rejected, even though the
+        // anchor's signature, client account, and timing are all valid.
+        let (anchor_sk, _anchor_pk) = deterministic_keypair_from_seed(29);
+        let (_client_sk, client_pk) = deterministic_keypair_from_seed(30);
+        let now = chrono::Utc::now().timestamp();
+        let anchor_pk = anchor_sk.verifying_key().to_bytes();
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(AccountId(anchor_pk)),
+            fee: 100,
+            seq_num: 0,
+            time_bounds: Some(TimeBounds {
+                min_time: (now - 10) as u64,
+                max_time: (now as u64) + 300,
+            }),
+            memo: Memo::None,
+            operations: vec![Operation {
+                source_account: Some(MuxedAccount::Ed25519(AccountId(client_pk))),
+                body: OperationBody::ManageData(ManageDataOp {
+                    // Signed for a different anchor domain than the one
+                    // we're about to validate against below.
+                    key: "attacker-controlled.example auth".to_string(),
+                    value: Some(vec![42u8; 48]),
+                }),
+            }],
+            ext: XDR_TX_EXT_V0,
+        };
+        let tx_hash = transaction_hash(STELLAR_PUBLIC_NETWORK_PASSPHRASE, &tx);
+        let sig = anchor_sk.sign(&tx_hash);
+        let env = TransactionEnvelope {
+            tx,
+            signatures: vec![DecoratedSignature {
+                hint: signature_hint(&anchor_pk),
+                signature: sig.to_bytes().to_vec(),
+            }],
+        };
+        let xdr = encode_transaction_envelope(&env);
+
+        let err = parse_and_validate_challenge(
+            &xdr,
+            &client_pk,
+            "test.com",
+            STELLAR_PUBLIC_NETWORK_PASSPHRASE,
+            now,
+            300,
+            60,
+        )
+        .unwrap_err();
+        assert!(matches!(err, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn sign_challenge_transaction_uses_the_resolved_network_not_mainnet() {
+        // Regression test for the network-passphrase bug: a testnet
+        // challenge (anchor signature computed against the testnet
+        // passphrase, exactly like `resolve_network_passphrase` would
+        // resolve for e.g. testanchor.stellar.org) must produce a client
+        // signature that verifies against the *testnet* hash. Signing
+        // against mainnet unconditionally (the bug) would produce a
+        // signature the anchor's own testnet-passphrase verification could
+        // never accept.
+        let (anchor_sk, _anchor_pk) = deterministic_keypair_from_seed(31);
+        let (client_sk, client_pk) = deterministic_keypair_from_seed(32);
+        let now = chrono::Utc::now().timestamp();
+        let anchor_pk = anchor_sk.verifying_key().to_bytes();
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(AccountId(anchor_pk)),
+            fee: 100,
+            seq_num: 0,
+            time_bounds: Some(TimeBounds {
+                min_time: (now - 10) as u64,
+                max_time: (now as u64) + 300,
+            }),
+            memo: Memo::None,
+            operations: vec![Operation {
+                source_account: Some(MuxedAccount::Ed25519(AccountId(client_pk))),
+                body: OperationBody::ManageData(ManageDataOp {
+                    key: "test.com auth".to_string(),
+                    value: Some(vec![42u8; 48]),
+                }),
+            }],
+            ext: XDR_TX_EXT_V0,
+        };
+        let tx_hash_testnet = transaction_hash(STELLAR_TESTNET_PASSPHRASE, &tx);
+        let anchor_sig = anchor_sk.sign(&tx_hash_testnet);
+        let env = TransactionEnvelope {
+            tx,
+            signatures: vec![DecoratedSignature {
+                hint: signature_hint(&anchor_pk),
+                signature: anchor_sig.to_bytes().to_vec(),
+            }],
+        };
+        let xdr = encode_transaction_envelope(&env);
+
+        // Sanity check: this challenge validates against testnet.
+        parse_and_validate_challenge(
+            &xdr,
+            &client_pk,
+            "test.com",
+            STELLAR_TESTNET_PASSPHRASE,
+            now,
+            300,
+            60,
+        )
+        .expect("testnet challenge should validate against the testnet passphrase");
+
+        let signed =
+            sign_challenge_transaction(&xdr, &client_sk, STELLAR_TESTNET_PASSPHRASE).unwrap();
+        let signed_env = decode_transaction_envelope(&signed).unwrap();
+        let client_hint = signature_hint(&client_pk);
+        let client_sig = signed_env
+            .signatures
+            .iter()
+            .find(|ds| ds.hint == client_hint)
+            .expect("client signature appended");
+
+        let sig_bytes: [u8; 64] = client_sig.signature.as_slice().try_into().unwrap();
+        let sig = Signature::from_bytes(&sig_bytes);
+
+        // Must verify against the testnet hash...
+        client_sk
+            .verifying_key()
+            .verify_strict(&tx_hash_testnet, &sig)
+            .expect("client signature must verify against the testnet hash");
+
+        // ...and must NOT verify against the mainnet hash (proving it
+        // wasn't just signed against a hardcoded mainnet passphrase).
+        let tx_hash_mainnet = transaction_hash(STELLAR_PUBLIC_NETWORK_PASSPHRASE, &signed_env.tx);
+        assert!(
+            client_sk
+                .verifying_key()
+                .verify_strict(&tx_hash_mainnet, &sig)
+                .is_err(),
+            "client signature must not verify against the mainnet hash"
+        );
+    }
+
+    #[test]
     fn sign_challenge_appends_valid_client_signature() {
         let (anchor_sk, _anchor_pk) = deterministic_keypair_from_seed(19);
         let (client_sk, client_pk) = deterministic_keypair_from_seed(20);
         let now = chrono::Utc::now().timestamp();
         let (_env, xdr) = build_test_challenge(&anchor_sk, &client_pk, -10, (now as u64) + 300);
-        let signed = sign_challenge_transaction(&xdr, &client_sk).unwrap();
+        let signed =
+            sign_challenge_transaction(&xdr, &client_sk, STELLAR_PUBLIC_NETWORK_PASSPHRASE)
+                .unwrap();
         let signed_env = decode_transaction_envelope(&signed).unwrap();
         assert!(signed_env.signatures.len() >= 2);
         let client_hint = signature_hint(&client_pk);
@@ -1155,6 +1316,7 @@ mod tests {
         let err = parse_and_validate_challenge(
             &xdr,
             &client_pk,
+            "test.com",
             STELLAR_PUBLIC_NETWORK_PASSPHRASE,
             now,
             300,
@@ -1278,6 +1440,7 @@ mod tests {
         let err = parse_and_validate_challenge(
             &xdr,
             &client_pk,
+            "test.com",
             STELLAR_PUBLIC_NETWORK_PASSPHRASE,
             now,
             300,
