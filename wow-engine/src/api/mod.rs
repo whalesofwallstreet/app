@@ -1,4 +1,4 @@
-use crate::anchor::tracker::TrackerStore;
+use crate::anchor::tracker::{TrackerStore, Transaction};
 use crate::anchor::{sep24::Sep24Client, sep38::Sep38Client, Sep24InteractiveResponse, Sep38Quote};
 use crate::bridge::attestation::AttestationError;
 use crate::bridge::cctp::CctpClient;
@@ -14,7 +14,7 @@ use crate::mempool::PoolRiskRegistry;
 use crate::router::slippage::SlippageError;
 use crate::router::{RouteOption, RoutePlanner};
 use axum::{
-    extract::Query,
+    extract::{Path, Query},
     routing::{get, post},
     Extension, Json, Router,
 };
@@ -269,6 +269,7 @@ pub fn create_router_with_cache(
         .route("/api/v1/anchor/deposit", post(deposit_handler))
         .route("/api/v1/anchor/withdraw", post(withdraw_handler))
         .route("/api/v1/anchor/quote", post(anchor_quote_handler))
+        .route("/api/v1/anchor/transaction/:id", get(transaction_handler))
         .route(
             "/api/v1/admin/invalidate-cache",
             post(admin_invalidate_cache_handler),
@@ -529,6 +530,26 @@ async fn withdraw_handler(
             &payload.account,
         )
         .await?;
+    Ok(Json(tx))
+}
+
+#[tracing::instrument(skip(tracker), err)]
+async fn transaction_handler(
+    tracker: Extension<Option<Arc<TrackerStore>>>,
+    Path(id): Path<String>,
+) -> Result<Json<Transaction>, AppError> {
+    let tracker = tracker.0.ok_or_else(|| {
+        AppError::Internal(anyhow::anyhow!(
+            "Database not configured for anchor tracker"
+        ))
+    })?;
+
+    let tx = tracker
+        .get_transaction(&id)
+        .await
+        .map_err(|err| AppError::Internal(err.into()))?
+        .ok_or_else(|| AppError::NotFound(format!("Unknown transaction id: {id}")))?;
+
     Ok(Json(tx))
 }
 

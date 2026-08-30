@@ -287,7 +287,7 @@ mod anchor_deposit_withdraw_success {
     use wow_engine::config::AppConfig;
     use wow_engine::db::Database;
 
-    async fn app_with_tracker() -> Option<axum::Router> {
+    async fn app_with_tracker() -> Option<(axum::Router, Arc<TrackerStore>)> {
         let database_url = std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| {
             "postgres://postgres:postgres@localhost/wow_engine_test".to_string()
         });
@@ -303,24 +303,25 @@ mod anchor_deposit_withdraw_success {
 
         let tracker = Arc::new(TrackerStore::new(db.clone()));
 
-        Some(create_router_with_cache(
+        let app = create_router_with_cache(
             None,
             Duration::from_secs(30),
             RouterDeps {
                 db: Some(db),
-                tracker: Some(tracker),
+                tracker: Some(tracker.clone()),
                 cache: ClusterCache::local_only(),
                 config: Arc::new(AppConfig::default()),
                 sep38_client: Arc::new(Sep38Client::new()),
                 mempool_risk_registry: Arc::new(wow_engine::mempool::PoolRiskRegistry::new()),
             },
-        ))
+        );
+        Some((app, tracker))
     }
 
     #[tokio::test]
     #[ignore]
     async fn test_deposit_endpoint_success() {
-        let Some(app) = app_with_tracker().await else {
+        let Some((app, _tracker)) = app_with_tracker().await else {
             return;
         };
         let server = TestServer::new(app).unwrap();
@@ -346,7 +347,7 @@ mod anchor_deposit_withdraw_success {
     #[tokio::test]
     #[ignore]
     async fn test_withdraw_endpoint_success() {
-        let Some(app) = app_with_tracker().await else {
+        let Some((app, _tracker)) = app_with_tracker().await else {
             return;
         };
         let server = TestServer::new(app).unwrap();
@@ -366,5 +367,57 @@ mod anchor_deposit_withdraw_success {
             .as_str()
             .unwrap()
             .contains("/sep24/interactive/withdraw"));
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_transaction_endpoint_returns_tracked_transaction() {
+        let Some((app, tracker)) = app_with_tracker().await else {
+            return;
+        };
+        let server = TestServer::new(app).unwrap();
+
+        let tx = wow_engine::anchor::tracker::Transaction {
+            id: format!("tx_test_{}", uuid::Uuid::new_v4()),
+            status: "pending_user_transfer_start".to_string(),
+            asset_code: "USDC".to_string(),
+            account: "GA5Z3IX5VQ3N6FB77T342A27RWRN7CKEZ63M3W7S5VJB3D77J6F2JAFK".to_string(),
+            amount_in: Some("100.0".to_string()),
+            amount_out: None,
+        };
+        tracker.insert_transaction(tx.clone()).await.unwrap();
+
+        let response = server
+            .get(&format!("/api/v1/anchor/transaction/{}", tx.id))
+            .await;
+        response.assert_status_ok();
+
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["id"], tx.id);
+        assert_eq!(body["status"], tx.status);
+        assert_eq!(body["asset_code"], tx.asset_code);
+        assert_eq!(body["account"], tx.account);
+        assert_eq!(body["amount_in"], "100.0");
+        assert!(body["amount_out"].is_null());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_transaction_endpoint_returns_404_for_unknown_id() {
+        let Some((app, _tracker)) = app_with_tracker().await else {
+            return;
+        };
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .get("/api/v1/anchor/transaction/tx_does_not_exist")
+            .await;
+        response.assert_status_not_found();
+
+        let body: serde_json::Value = response.json();
+        assert!(body["error"]
+            .as_str()
+            .unwrap()
+            .contains("tx_does_not_exist"));
     }
 }

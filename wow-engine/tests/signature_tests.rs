@@ -178,6 +178,17 @@ async fn admin_invalidate_cache_endpoint_requires_signature() {
 }
 
 #[tokio::test]
+async fn transaction_endpoint_requires_signature() {
+    // Not on the PUBLIC_PATHS allowlist, so — like every other sensitive
+    // endpoint — it must be protected by default with no extra opt-in.
+    let (_signing_key, server) = server_with_verification();
+
+    let response = server.get("/api/v1/anchor/transaction/tx_test_id").await;
+
+    response.assert_status(StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn admin_invalidate_cache_endpoint_accepts_valid_signature() {
     let (signing_key, server) = server_with_verification();
     let payload = json!({ "chain": "Ethereum" });

@@ -21,6 +21,7 @@ Rust-based cross-chain routing and fiat orchestration engine.
 | POST   | `/api/v1/quote`                 | Get cross-chain quote        |
 | POST   | `/api/v1/anchor/deposit`        | Initiate anchor deposit      |
 | POST   | `/api/v1/anchor/withdraw`       | Initiate anchor withdrawal   |
+| GET    | `/api/v1/anchor/transaction/:id`| Poll anchor transaction status |
 | POST   | `/api/v1/anchor/quote`          | Get anchor quote             |
 
 ---

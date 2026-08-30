@@ -855,7 +855,7 @@ mod tests {
     ) -> (TransactionEnvelope, String) {
         let anchor_pk = anchor_sk.verifying_key().to_bytes();
         let now = chrono::Utc::now().timestamp();
-        let min_time = (now as i64 + min_time_offset) as u64;
+        let min_time = (now + min_time_offset) as u64;
         let nonce = [42u8; 48];
         let tx = Transaction {
             source_account: MuxedAccount::Ed25519(AccountId(anchor_pk)),

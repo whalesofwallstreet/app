@@ -19,6 +19,9 @@ pub enum AppError {
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
 
+    #[error("Not Found: {0}")]
+    NotFound(String),
+
     /// A downstream dependency is unavailable or overloaded (e.g. the database
     /// connection pool is exhausted, or a circuit breaker has tripped open).
     ///
@@ -50,6 +53,7 @@ impl IntoResponse for AppError {
                 tracing::debug!("Rejected unauthorized request: {msg}");
                 (StatusCode::UNAUTHORIZED, "Unauthorized".to_string())
             }
+            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             AppError::ServiceUnavailable(msg) => {
                 tracing::warn!("Service unavailable: {msg}");
                 (StatusCode::SERVICE_UNAVAILABLE, msg)
