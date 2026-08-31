@@ -279,6 +279,20 @@ impl RpcKeySource {
             .await?;
 
         if let Some(err) = response.get("error") {
+            // Most providers surface the revert payload as the error
+            // object's `data` field (a hex string, occasionally
+            // double-nested under another `data` key). Decode it into a
+            // human-readable reason where possible instead of leaving
+            // callers to puzzle over an opaque hex blob.
+            let revert_hex = err
+                .get("data")
+                .and_then(|d| d.as_str().or_else(|| d.get("data")?.as_str()));
+            if let Some(hex_str) = revert_hex {
+                if let Ok(bytes) = hex::decode(hex_str.trim_start_matches("0x")) {
+                    let reason = crate::bridge::revert::decode_revert_reason(&bytes);
+                    anyhow::bail!("eth_call reverted: {reason} (raw error: {err})");
+                }
+            }
             anyhow::bail!("eth_call failed: {err}");
         }
         let result = response
@@ -1035,6 +1049,45 @@ mod tests {
             .verify(&message, &attestation, LOCAL_DOMAIN)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_rpc_key_source_decodes_revert_reason_on_eth_call_failure() {
+        use alloy_sol_types::{Revert, SolError};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // Emulates a provider returning a standard JSON-RPC eth_call error
+        // whose `data` field carries the opaque ABI-encoded revert payload,
+        // as if the MessageTransmitter's `signatureThreshold()` getter had
+        // reverted with `require(false, "paused")`.
+        let revert_data = Revert::from("paused").abi_encode();
+        let server = MockServer::start().await;
+        Mock::given(wiremock::matchers::any())
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": {
+                    "code": -32000,
+                    "message": "execution reverted",
+                    "data": format!("0x{}", hex::encode(&revert_data)),
+                },
+            })))
+            .mount(&server)
+            .await;
+
+        let source = RpcKeySource::new(
+            crate::http_client::build_resilient_client().unwrap(),
+            server.uri(),
+            "0x0a992d191deec32afe36203ad87d7d289a738f81",
+        );
+        let err = source.fetch().await.unwrap_err();
+
+        // The opaque hex blob must be decoded into the plain-text revert
+        // reason, not left as a raw hex dump the caller has to decode by hand.
+        assert!(
+            err.to_string().contains("revert: paused"),
+            "expected the decoded revert reason in the error, got: {err}"
+        );
     }
 
     #[test]
