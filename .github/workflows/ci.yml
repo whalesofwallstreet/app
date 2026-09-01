@@ -146,7 +146,15 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           comment-always: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
           fail-on-alert: true
-          alert-threshold: "105%"
+          # Adjacent runs on GitHub's shared runners have shown ~15-75%
+          # swings on this exact benchmark suite with no code change
+          # involved (e.g. commit 48d8a3e landed on an outlier-fast runner,
+          # making every later commit look like a false 1.6-1.8x
+          # regression). 105% was far tighter than the observed noise floor
+          # and alerted on essentially every push. 200% still catches a
+          # genuine multi-fold regression while tolerating normal runner
+          # variance.
+          alert-threshold: "200%"
           external-data-json-path: ./cache/benchmark-data.json
 
       - name: Save benchmark data
