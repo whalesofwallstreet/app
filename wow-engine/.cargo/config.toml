@@ -1,0 +1,15 @@
+[env]
+# `cargo test`/`cargo bench` construct real GasOracle/PriceOracle instances
+# throughout the router and bridge test suites, which would otherwise make
+# live, rate-limited network calls (Etherscan/Arbiscan/CoinGecko) on every
+# distinct asset/chain a test touches — see benches/router_benchmarks.rs,
+# which already opts into this per-invocation. Defaulting it here instead
+# means every `cargo`-driven process (test, bench, local `cargo run`)
+# resolves pricing/gas lookups from the static fallback table unless a
+# caller explicitly exports MOCK_GAS_ORACLE in their own shell first (an
+# already-set env var always takes precedence over this default).
+#
+# Never affects the actual deployed binary: production runs the compiled
+# executable directly (see Dockerfile's ENTRYPOINT), not via cargo, so this
+# file is never read outside a local/CI `cargo` invocation.
+MOCK_GAS_ORACLE = "true"

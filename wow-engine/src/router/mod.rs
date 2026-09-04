@@ -3,7 +3,8 @@ pub mod dex;
 pub mod slippage;
 
 use crate::bridge::{
-    cctp::CctpClient, debridge::DeBridgeClient, gas_oracle::GasOracle, BridgeProvider, Chain,
+    cctp::CctpClient, debridge::DeBridgeClient, gas_oracle::GasOracle, price_oracle::PriceOracle,
+    BridgeProvider, Chain,
 };
 use crate::config::AppConfig;
 use crate::mempool::risk::HIGH_RISK_SLIPPAGE_PENALTY_BPS;
@@ -44,6 +45,11 @@ pub struct RoutePlanner {
     /// [`Self::new`] gets a private, always-empty registry, so routing
     /// behaves identically whether or not the mempool listener is running.
     risk_registry: Arc<PoolRiskRegistry>,
+    /// Single source of truth for asset-to-USD pricing, shared with the
+    /// `GasOracle` this planner's `cctp`/`debridge` clients use — so route
+    /// pathfinding, DEX quotes, and gas-fee-in-USD estimates never disagree
+    /// about what an asset is worth. See [`crate::bridge::price_oracle`].
+    price_oracle: Arc<PriceOracle>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -77,15 +83,8 @@ impl Ord for State {
     }
 }
 
-fn get_usd_value(asset: &str, amount: u64) -> f64 {
-    let price = match asset.to_uppercase().as_str() {
-        "ETH" => 3000.0,
-        "SOL" => 150.0,
-        "XLM" => 0.10,
-        "USDC" => 1.0,
-        _ => 1.0,
-    };
-    (amount as f64) * price
+async fn get_usd_value(price_oracle: &PriceOracle, asset: &str, amount: u64) -> f64 {
+    (amount as f64) * price_oracle.get_price_usd(asset).await
 }
 
 impl RoutePlanner {
@@ -101,11 +100,16 @@ impl RoutePlanner {
         config: Arc<AppConfig>,
         risk_registry: Arc<PoolRiskRegistry>,
     ) -> Self {
-        let oracle = Arc::new(GasOracle::new(config.clone()));
+        let price_oracle = Arc::new(PriceOracle::new(config.clone()));
+        let oracle = Arc::new(GasOracle::with_price_oracle(
+            config.clone(),
+            price_oracle.clone(),
+        ));
         Self {
             debridge: DeBridgeClient::new(oracle.clone()),
             cctp: CctpClient::new(oracle, config),
             risk_registry,
+            price_oracle,
         }
     }
 
@@ -131,7 +135,7 @@ impl RoutePlanner {
         let mut pq = BinaryHeap::new();
         let mut best_seen: HashMap<Node, u64> = HashMap::new();
 
-        let initial_usd = get_usd_value(source_asset, amount_in);
+        let initial_usd = get_usd_value(&self.price_oracle, source_asset, amount_in).await;
 
         pq.push(State {
             usd_value: (initial_usd * 1000.0) as u64,
@@ -199,17 +203,22 @@ impl RoutePlanner {
             for target_asset in &all_assets {
                 if target_asset != &state.node.asset {
                     match DexProvider::get_swap_quote(
+                        &self.price_oracle,
                         state.node.chain,
                         &state.node.asset,
                         target_asset,
                         state.amount,
-                    ) {
+                    )
+                    .await
+                    {
                         Ok(quote) => {
                             let next_node = Node {
                                 chain: state.node.chain,
                                 asset: target_asset.to_string(),
                             };
-                            let next_usd = get_usd_value(target_asset, quote.amount_out);
+                            let next_usd =
+                                get_usd_value(&self.price_oracle, target_asset, quote.amount_out)
+                                    .await;
                             let next_usd_scaled = (next_usd * 1000.0) as u64;
 
                             // Widen this leg's slippage tolerance when the
@@ -299,7 +308,8 @@ impl RoutePlanner {
                                 chain: *target_chain,
                                 asset: "USDC".to_string(),
                             };
-                            let next_usd = get_usd_value("USDC", quote.amount_out);
+                            let next_usd =
+                                get_usd_value(&self.price_oracle, "USDC", quote.amount_out).await;
                             let next_usd_net = next_usd - quote.estimated_fee_usd;
                             let next_usd_scaled = if next_usd_net > 0.0 {
                                 (next_usd_net * 1000.0) as u64
@@ -350,7 +360,9 @@ impl RoutePlanner {
                             chain: *target_chain,
                             asset: state.node.asset.clone(),
                         };
-                        let next_usd = get_usd_value(&state.node.asset, quote.amount_out);
+                        let next_usd =
+                            get_usd_value(&self.price_oracle, &state.node.asset, quote.amount_out)
+                                .await;
                         let next_usd_net = next_usd - quote.estimated_fee_usd;
                         let next_usd_scaled = if next_usd_net > 0.0 {
                             (next_usd_net * 1000.0) as u64
@@ -437,7 +449,10 @@ impl RoutePlanner {
                     if from == to {
                         continue;
                     }
-                    if let Ok(quote) = DexProvider::get_swap_quote(chain, from, to, ref_units) {
+                    if let Ok(quote) =
+                        DexProvider::get_swap_quote(&self.price_oracle, chain, from, to, ref_units)
+                            .await
+                    {
                         edges.push(arbitrage::ArbitrageEdge {
                             from: arbitrage::GraphNode::new(chain, from),
                             to: arbitrage::GraphNode::new(chain, to),
@@ -508,8 +523,21 @@ impl RoutePlanner {
 mod tests {
     use super::*;
 
+    /// Every test in this module builds a real `RoutePlanner`, whose
+    /// `PriceOracle`/`GasOracle` would otherwise make live, rate-limited
+    /// calls to CoinGecko/Etherscan/Arbiscan on every distinct asset the
+    /// Dijkstra/arbitrage search touches. Setting this (the same sentinel
+    /// `benches/router_benchmarks.rs` already uses) makes every oracle
+    /// resolve to its static fallback table instead — deterministic, and
+    /// without which these tests went from milliseconds to 60+ seconds
+    /// each once real network calls were on the line.
+    fn use_fallback_pricing() {
+        std::env::set_var("MOCK_GAS_ORACLE", "true");
+    }
+
     #[tokio::test]
     async fn test_find_best_route_usdc() {
+        use_fallback_pricing();
         let planner = RoutePlanner::new(Arc::new(AppConfig::default()));
         let routes = planner
             .find_best_route(Chain::Solana, Chain::Stellar, "USDC", "USDC", 10000, false)
@@ -528,6 +556,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_find_best_route_multi_hop_eth_to_xlm() {
+        use_fallback_pricing();
         let planner = RoutePlanner::new(Arc::new(AppConfig::default()));
         let routes = planner
             .find_best_route(
@@ -557,6 +586,7 @@ mod tests {
         // pricing model (e.g. divergent price tables between providers)
         // accidentally introduces a free-money loop, this test catches it
         // rather than shipping it into `run_arbitrage_scanner`'s live scan.
+        use_fallback_pricing();
         let planner = RoutePlanner::new(Arc::new(AppConfig::default()));
         let found = planner.scan_for_arbitrage().await;
         assert!(
@@ -567,6 +597,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_snapshot_arbitrage_edges_covers_dex_and_bridge_legs() {
+        use_fallback_pricing();
         let planner = RoutePlanner::new(Arc::new(AppConfig::default()));
         let edges = planner.snapshot_arbitrage_edges().await;
 
@@ -583,6 +614,7 @@ mod tests {
 
     #[tokio::test]
     async fn high_risk_pool_flag_widens_the_routes_slippage_tolerance() {
+        use_fallback_pricing();
         let config = Arc::new(AppConfig::default());
         let registry = Arc::new(PoolRiskRegistry::new());
         let planner = RoutePlanner::with_risk_registry(config, registry.clone());
@@ -611,6 +643,7 @@ mod tests {
 
     #[tokio::test]
     async fn unflagged_pool_leaves_slippage_unchanged_across_calls() {
+        use_fallback_pricing();
         let config = Arc::new(AppConfig::default());
         let planner = RoutePlanner::new(config);
 

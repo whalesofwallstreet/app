@@ -57,6 +57,14 @@ pub struct AppConfig {
     #[serde(default)]
     pub arbiscan_api_key: Option<String>,
 
+    // ── Price Oracle ────────────────────────────────────────────────
+    /// API key for CoinGecko price lookups, sent as the `x-cg-demo-api-key`
+    /// header. When unset, requests are sent unauthenticated against
+    /// CoinGecko's public rate limit, same as the Etherscan/Arbiscan keys
+    /// above.
+    #[serde(default)]
+    pub coingecko_api_key: Option<String>,
+
     // ── Anchor & Frontend Allowlists ────────────────────────────────
     /// Comma-separated list of anchor domains the engine is permitted to
     /// interact with (e.g. `"localhost,anchor.stellar.org"`).
@@ -229,6 +237,7 @@ impl Default for AppConfig {
             stellar_horizon_url: default_stellar_horizon_url(),
             etherscan_api_key: None,
             arbiscan_api_key: None,
+            coingecko_api_key: None,
             allowed_anchor_domains: default_allowed_anchor_domains(),
             allowed_cors_origins: default_allowed_cors_origins(),
             rate_limit_global_per_minute: default_rate_limit_global_per_minute(),

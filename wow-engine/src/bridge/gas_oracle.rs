@@ -1,3 +1,4 @@
+use crate::bridge::price_oracle::PriceOracle;
 use crate::bridge::Chain;
 use crate::config::AppConfig;
 use moka::future::Cache;
@@ -44,6 +45,19 @@ pub struct GasOracle {
     client: ClientWithMiddleware,
     etherscan_base_url: String,
     arbiscan_base_url: String,
+    /// Source of truth for the ETH price used in fee-in-USD conversion —
+    /// shared with `RoutePlanner` (via [`Self::with_price_oracle`]) so gas
+    /// fees, route pathfinding, and DEX quotes never disagree about what
+    /// ETH is worth. Callers that don't need that sharing (most existing
+    /// `GasOracle::new` call sites) get their own private instance.
+    price_oracle: Arc<PriceOracle>,
+    /// When true, [`Self::fetch_from_api`] never makes a network call and
+    /// resolves straight to the fallback table. Set whenever `MOCK_GAS_ORACLE`
+    /// is present (by [`Self::new`] and [`Self::with_price_oracle`], both
+    /// used in production) — never by the `#[cfg(test)]` [`Self::with_base_urls`],
+    /// whose whole purpose is exercising the real fetch path against an
+    /// explicit wiremock URL regardless of that ambient env var.
+    skip_network: bool,
     /// Count of lookups that fell through to static fallback pricing.
     /// Sustained growth here means live gas data has stopped flowing —
     /// surface it on a dashboard/alert rather than relying on scraping logs.
@@ -52,17 +66,54 @@ pub struct GasOracle {
 
 impl GasOracle {
     pub fn new(config: Arc<AppConfig>) -> Self {
-        Self::with_base_urls(
+        let price_oracle = Arc::new(PriceOracle::new(config.clone()));
+        Self::with_price_oracle(config, price_oracle)
+    }
+
+    /// Builds a `GasOracle` backed by a caller-supplied [`PriceOracle`]
+    /// instead of a private one, so the ETH price it uses for fee-in-USD
+    /// conversion is literally the same cache `RoutePlanner` reads for
+    /// route pathfinding and DEX quotes. Respects `MOCK_GAS_ORACLE` — set
+    /// by default for every `cargo`-driven process, see `.cargo/config.toml`.
+    pub fn with_price_oracle(config: Arc<AppConfig>, price_oracle: Arc<PriceOracle>) -> Self {
+        let skip_network = std::env::var("MOCK_GAS_ORACLE").is_ok();
+        Self::build(
             config,
             DEFAULT_ETHERSCAN_BASE_URL.to_string(),
             DEFAULT_ARBISCAN_BASE_URL.to_string(),
+            price_oracle,
+            skip_network,
         )
     }
 
+    /// Test-only: builds a `GasOracle` pointed at mock Etherscan/Arbiscan
+    /// endpoints, backed by a network-free [`PriceOracle::new_for_tests`] so
+    /// the ETH-price sub-lookup inside `fetch_etherscan`/`fetch_arbiscan`
+    /// never depends on live network access either. Deliberately ignores
+    /// `MOCK_GAS_ORACLE` so it always exercises the real fetch/parse logic
+    /// against the given (wiremock) URLs.
+    #[cfg(test)]
     fn with_base_urls(
         config: Arc<AppConfig>,
         etherscan_base_url: String,
         arbiscan_base_url: String,
+    ) -> Self {
+        let price_oracle = Arc::new(PriceOracle::new_for_tests());
+        Self::build(
+            config,
+            etherscan_base_url,
+            arbiscan_base_url,
+            price_oracle,
+            false,
+        )
+    }
+
+    fn build(
+        config: Arc<AppConfig>,
+        etherscan_base_url: String,
+        arbiscan_base_url: String,
+        price_oracle: Arc<PriceOracle>,
+        skip_network: bool,
     ) -> Self {
         // Cache with 60 seconds TTL
         let cache = Cache::builder()
@@ -80,6 +131,8 @@ impl GasOracle {
             client,
             etherscan_base_url,
             arbiscan_base_url,
+            price_oracle,
+            skip_network,
             fallback_count: AtomicU64::new(0),
         }
     }
@@ -144,7 +197,7 @@ impl GasOracle {
     }
 
     async fn fetch_from_api(&self, chain: Chain) -> Result<f64, std::sync::Arc<anyhow::Error>> {
-        if std::env::var("MOCK_GAS_ORACLE").is_ok() {
+        if self.skip_network {
             return Ok(Self::fallback_fee(chain));
         }
 
@@ -189,9 +242,10 @@ impl GasOracle {
             .and_then(|p| p.as_str())
         {
             let gwei: f64 = price_str.parse()?;
-            // Assume 150,000 gas limit for a bridge tx, and $3000 per ETH
+            let eth_price_usd = self.price_oracle.get_price_usd("ETH").await;
+            // Assume 150,000 gas limit for a bridge tx.
             // Fee (USD) = gas_limit * gas_price_gwei * 10^-9 * eth_price_usd
-            let fee_usd = 150_000.0 * gwei * 1e-9 * 3000.0;
+            let fee_usd = 150_000.0 * gwei * 1e-9 * eth_price_usd;
             return Ok(fee_usd);
         }
         Err(anyhow::anyhow!("Invalid Etherscan response"))
@@ -222,7 +276,8 @@ impl GasOracle {
             .and_then(|p| p.as_str())
         {
             let gwei: f64 = price_str.parse()?;
-            let fee_usd = 1_000_000.0 * gwei * 1e-9 * 3000.0; // L2 gas limit is higher, but gwei is tiny
+            let eth_price_usd = self.price_oracle.get_price_usd("ETH").await;
+            let fee_usd = 1_000_000.0 * gwei * 1e-9 * eth_price_usd; // L2 gas limit is higher, but gwei is tiny
             return Ok(fee_usd);
         }
         Err(anyhow::anyhow!("Invalid Arbiscan response"))
