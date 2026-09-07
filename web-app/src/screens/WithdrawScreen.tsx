@@ -3,12 +3,14 @@ import { useTheme } from "../ThemeContext";
 import { useAppNavigation } from "../context/NavigationContext";
 import { Ionicons } from "../components/Ionicons";
 import { fonts } from "../theme";
-import { useWallet } from "../context/WalletContext";
+import { useWalletBalance } from "../context/BalanceContext";
+import { useWalletTransactions } from "../context/TransactionContext";
 
 export const WithdrawScreen = () => {
   const { c } = useTheme();
   const { goBack } = useAppNavigation();
-  const { balance, withdraw } = useWallet();
+  const { balance } = useWalletBalance();
+  const { withdraw } = useWalletTransactions();
 
   const banks = [
     { id: "1", name: "Chase Bank", last4: "4821" },

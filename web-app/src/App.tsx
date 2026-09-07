@@ -2,7 +2,9 @@
 import { motion, AnimatePresence } from "framer-motion";
 import { ThemeProvider, useTheme } from "./ThemeContext";
 import { NavigationProvider, useAppNavigation } from "./context/NavigationContext";
-import { WalletProvider, useWallet } from "./context/WalletContext";
+import { BalanceProvider } from "./context/BalanceContext";
+import { TransactionProvider, useWalletTransactions } from "./context/TransactionContext";
+import { ConnectionProvider } from "./context/ConnectionContext";
 import { Ionicons } from "./components/Ionicons";
 
 // Import Extracted Screens
@@ -24,7 +26,7 @@ import { NotificationsScreen } from "./screens/NotificationsScreen";
 const AppSimulator = () => {
   const { c, theme, setTheme } = useTheme();
   const { currentScreen, activeTab, setActiveTab, navigate } = useAppNavigation();
-  const { transactions, deposit } = useWallet();
+  const { transactions, deposit } = useWalletTransactions();
 
   // Render correct page
   const renderScreen = () => {
@@ -171,15 +173,19 @@ export default function App() {
   return (
     <ThemeProvider>
       <NavigationProvider>
-        <WalletProvider>
-          {/* Glow elements in the background constrained to viewport bounds */}
-          <div className="glow-wrapper">
-            <div className="web-bg-glow" style={{ top: "10%", left: "20%" }} />
-            <div className="web-bg-glow-2" style={{ bottom: "10%", right: "20%" }} />
-          </div>
-          
-          <AppSimulator />
-        </WalletProvider>
+        <BalanceProvider>
+          <TransactionProvider>
+            <ConnectionProvider>
+              {/* Glow elements in the background constrained to viewport bounds */}
+              <div className="glow-wrapper">
+                <div className="web-bg-glow" style={{ top: "10%", left: "20%" }} />
+                <div className="web-bg-glow-2" style={{ bottom: "10%", right: "20%" }} />
+              </div>
+              
+              <AppSimulator />
+            </ConnectionProvider>
+          </TransactionProvider>
+        </BalanceProvider>
       </NavigationProvider>
     </ThemeProvider>
   );

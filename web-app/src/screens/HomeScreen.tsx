@@ -8,12 +8,12 @@ import { ActionButtons } from "../components/ActionButtons";
 import { QuickContacts } from "../components/QuickContacts";
 import { TransactionItem } from "../components/TransactionItem";
 import { type Transaction } from "../data/mockData";
-import { useWallet } from "../context/WalletContext";
+import { useWalletBalance } from "../context/BalanceContext";
 
 export const HomeScreen = ({ txs }: { txs: Transaction[] }) => {
   const { c } = useTheme();
   const { navigate } = useAppNavigation();
-  const { balance } = useWallet();
+  const { balance } = useWalletBalance();
 
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";

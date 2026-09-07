@@ -4,12 +4,14 @@ import { useAppNavigation } from "../context/NavigationContext";
 import { fonts } from "../theme";
 import { contacts } from "../data/mockData";
 import { Ionicons } from "../components/Ionicons";
-import { useWallet } from "../context/WalletContext";
+import { useWalletBalance } from "../context/BalanceContext";
+import { useWalletTransactions } from "../context/TransactionContext";
 
 export const SendScreen = () => {
   const { c } = useTheme();
   const { goBack, params } = useAppNavigation();
-  const { balance, addTransaction } = useWallet();
+  const { balance } = useWalletBalance();
+  const { addTransaction } = useWalletTransactions();
   const preselected = params?.to;
 
   const [step, setStep] = useState<"recipient" | "amount" | "confirm">(preselected ? "amount" : "recipient");
