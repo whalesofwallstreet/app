@@ -31,7 +31,7 @@ const ActionButtons = ({ navigation }: { navigation: any }) => {
               style={styles.iconWrap}
             >
               <Ionicons 
-                name={action.icon} 
+                name={action.icon as any} 
                 size={18} 
                 color="#fff" 
                 style={{ transform: [{ rotate: `${action.rotation || 0}deg` }] }}
@@ -40,9 +40,9 @@ const ActionButtons = ({ navigation }: { navigation: any }) => {
           ) : (
             <View style={[styles.iconWrap, { backgroundColor: c.secondary }]}>
               {action.iconSet === "material" ? (
-                <MaterialCommunityIcons name={action.icon} size={18} color={c.foreground} />
+                <MaterialCommunityIcons name={action.icon as any} size={18} color={c.foreground} />
               ) : (
-                <Ionicons name={action.icon} size={18} color={c.foreground} />
+                <Ionicons name={action.icon as any} size={18} color={c.foreground} />
               )}
             </View>
           )}

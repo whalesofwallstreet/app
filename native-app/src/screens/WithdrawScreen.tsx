@@ -4,6 +4,9 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useTheme } from "../ThemeContext";
 import { useWallet } from "../WalletContext";
+import { useSecurity } from "../SecurityContext";
+import { authenticateBiometric } from "../utils/biometrics";
+import { PinModal } from "../components/PinModal";
 import { LinearGradient } from "expo-linear-gradient";
 import { shadows } from "../theme";
 
@@ -15,14 +18,25 @@ const banks = [
 const WithdrawScreen = ({ navigation }: any) => {
   const { c } = useTheme();
   const { balance, withdraw } = useWallet();
+  const { biometricsEnabled, biometricThreshold, userPin } = useSecurity();
   const [selected, setSelected] = useState(banks[0].id);
   const [amount, setAmount] = useState("");
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [showPinModal, setShowPinModal] = useState(false);
 
   const selectedBank = banks.find((b) => b.id === selected) || banks[0];
 
-  const handleWithdrawSubmit = () => {
+  const executeWithdrawal = (val: number) => {
+    setLoading(true);
+    setTimeout(() => {
+      withdraw(val, selectedBank.name);
+      setLoading(false);
+      setSuccess(true);
+    }, 1500);
+  };
+
+  const handleWithdrawSubmit = async () => {
     const val = parseFloat(amount);
     if (isNaN(val) || val <= 0) return;
     if (val > balance) {
@@ -30,12 +44,26 @@ const WithdrawScreen = ({ navigation }: any) => {
       return;
     }
 
-    setLoading(true);
-    setTimeout(() => {
-      withdraw(val, selectedBank.name);
-      setLoading(false);
-      setSuccess(true);
-    }, 1500);
+    // Step-up Biometric authentication if amount >= threshold
+    if (biometricsEnabled && val >= biometricThreshold) {
+      const auth = await authenticateBiometric(`Authorize withdrawal of $${val.toFixed(2)}`);
+
+      if (auth.success) {
+        executeWithdrawal(val);
+      } else if (auth.fallbackToPin) {
+        setShowPinModal(true);
+      } else {
+        Alert.alert("Authentication Canceled", "Withdrawal was canceled because biometric check failed or was canceled.");
+      }
+    } else {
+      executeWithdrawal(val);
+    }
+  };
+
+  const handlePinSuccess = () => {
+    setShowPinModal(false);
+    const val = parseFloat(amount);
+    executeWithdrawal(val);
   };
 
   const handleBack = () => navigation.goBack();
@@ -126,11 +154,20 @@ const WithdrawScreen = ({ navigation }: any) => {
               />
             </View>
 
+            {biometricsEnabled && (
+              <View style={styles.securityBadge}>
+                <Ionicons name="shield-checkmark" size={14} color={c.primary} />
+                <Text style={[styles.securityBadgeText, { color: c.mutedForeground }]}>
+                  FaceID required for withdrawals over ${biometricThreshold}
+                </Text>
+              </View>
+            )}
+
             <TouchableOpacity
               disabled={!amount || parseFloat(amount) === 0}
               onPress={handleWithdrawSubmit}
               activeOpacity={0.8}
-              style={{ marginTop: 28 }}
+              style={{ marginTop: 20 }}
             >
               <LinearGradient
                 colors={c.gradientAccent as [string, string]}
@@ -144,6 +181,13 @@ const WithdrawScreen = ({ navigation }: any) => {
           </>
         )}
       </ScrollView>
+
+      <PinModal
+        visible={showPinModal}
+        expectedPin={userPin}
+        onSuccess={handlePinSuccess}
+        onCancel={() => setShowPinModal(false)}
+      />
     </SafeAreaView>
   );
 };
@@ -170,6 +214,17 @@ const styles = StyleSheet.create({
   },
   dollarSign: { fontSize: 18, fontWeight: "700", marginRight: 4 },
   amountInput: { flex: 1, fontSize: 18, fontWeight: "700" },
+  securityBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 12,
+    paddingHorizontal: 4,
+  },
+  securityBadgeText: {
+    fontSize: 12,
+    fontWeight: "500",
+  },
   ctaBtn: { paddingVertical: 16, borderRadius: 16, alignItems: "center" },
   ctaText: { color: "#fff", fontSize: 16, fontWeight: "700" },
   loadingWrap: { paddingVertical: 40, alignItems: "center" },

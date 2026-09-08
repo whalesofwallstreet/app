@@ -12,8 +12,8 @@ jest.mock("expo-linear-gradient", () => {
 });
 
 describe("BalanceCard Component", () => {
-  it("renders correctly with balance visible", () => {
-    const { getByText } = render(
+  it("renders correctly with balance visible", async () => {
+    const { getByText } = await render(
       <ThemeProvider>
         <BalanceCard balance={1240.5} />
       </ThemeProvider>

@@ -13,6 +13,7 @@ import { StatusBar } from "expo-status-bar";
 import { Ionicons } from "@expo/vector-icons";
 import { ThemeProvider, useTheme } from "./src/ThemeContext";
 import { WalletProvider } from "./src/WalletContext";
+import { SecurityProvider } from "./src/SecurityContext";
 
 import HomeScreen from "./src/screens/HomeScreen";
 import SendScreen from "./src/screens/SendScreen";
@@ -141,9 +142,11 @@ export default function App() {
       >
         <SafeAreaProvider>
           <ThemeProvider>
-            <WalletProvider>
-              <AppNavigator />
-            </WalletProvider>
+            <SecurityProvider>
+              <WalletProvider>
+                <AppNavigator />
+              </WalletProvider>
+            </SecurityProvider>
           </ThemeProvider>
         </SafeAreaProvider>
       </PersistQueryClientProvider>
