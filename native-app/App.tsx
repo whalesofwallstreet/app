@@ -14,6 +14,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { ThemeProvider, useTheme } from "./src/ThemeContext";
 import { WalletProvider } from "./src/WalletContext";
 import { SecurityProvider } from "./src/SecurityContext";
+import { WalletConnectProvider } from "./src/WalletConnectContext";
 
 import HomeScreen from "./src/screens/HomeScreen";
 import SendScreen from "./src/screens/SendScreen";
@@ -143,9 +144,11 @@ export default function App() {
         <SafeAreaProvider>
           <ThemeProvider>
             <SecurityProvider>
-              <WalletProvider>
-                <AppNavigator />
-              </WalletProvider>
+              <WalletConnectProvider>
+                <WalletProvider>
+                  <AppNavigator />
+                </WalletProvider>
+              </WalletConnectProvider>
             </SecurityProvider>
           </ThemeProvider>
         </SafeAreaProvider>

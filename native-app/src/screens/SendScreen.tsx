@@ -6,6 +6,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useTheme } from "../ThemeContext";
 import { useWallet } from "../WalletContext";
+import { useWalletConnect } from "../WalletConnectContext";
 import { contacts } from "../data/mockData";
 import { LinearGradient } from "expo-linear-gradient";
 import { useFocusEffect } from "@react-navigation/native";
@@ -13,6 +14,7 @@ import { useFocusEffect } from "@react-navigation/native";
 const SendScreen = ({ navigation, route }: any) => {
   const { c } = useTheme();
   const { balance, addTransaction } = useWallet();
+  const { isConnected, address, connectWallet, signAndSubmitBridgeTransaction, isSigning } = useWalletConnect();
   const preselected = route?.params?.to;
 
   const [step, setStep] = useState<"recipient" | "amount" | "confirm">(preselected ? "amount" : "recipient");
@@ -63,7 +65,7 @@ const SendScreen = ({ navigation, route }: any) => {
     }
   };
 
-  const handleSend = () => {
+  const handleSend = async () => {
     const val = parseFloat(amount);
     if (isNaN(val) || val <= 0) return;
     if (val > balance) {
@@ -72,6 +74,25 @@ const SendScreen = ({ navigation, route }: any) => {
     }
 
     setSending(true);
+
+    if (isConnected) {
+      const res = await signAndSubmitBridgeTransaction({
+        sourceChain: "Ethereum",
+        destChain: "Stellar",
+        sourceAsset: "USDC",
+        destAsset: "USDC",
+        amountIn: val,
+        amountOut: val,
+        provider: "cctp",
+      });
+
+      if (!res.success) {
+        setSending(false);
+        Alert.alert("Signing Failed", res.error || "Failed to sign bridge transaction in mobile wallet.");
+        return;
+      }
+    }
+
     setTimeout(() => {
       addTransaction({
         type: "sent",
@@ -83,7 +104,7 @@ const SendScreen = ({ navigation, route }: any) => {
       });
       setSending(false);
       navigation.goBack();
-    }, 1500);
+    }, 1200);
   };
 
   const handleBack = () => {
@@ -111,6 +132,19 @@ const SendScreen = ({ navigation, route }: any) => {
               <Ionicons name="chevron-back" size={20} color={c.foreground} />
             </TouchableOpacity>
             <Text style={[styles.title, { color: c.foreground }]}>Transfer</Text>
+
+            <TouchableOpacity
+              onPress={connectWallet}
+              style={[
+                styles.wcHeaderBadge,
+                { backgroundColor: isConnected ? c.success + "1A" : c.primary + "1A" },
+              ]}
+            >
+              <Ionicons name="wallet-outline" size={14} color={isConnected ? c.success : c.primary} />
+              <Text style={{ fontSize: 11, fontWeight: "700", color: isConnected ? c.success : c.primary }}>
+                {isConnected ? `${address?.slice(0, 4)}...${address?.slice(-3)}` : "Connect Wallet"}
+              </Text>
+            </TouchableOpacity>
           </View>
 
           {/* Step 1: Recipient */}
@@ -308,9 +342,17 @@ const styles = StyleSheet.create({
   safe: { flex: 1 },
   keyboardAvoid: { flex: 1 },
   content: { paddingHorizontal: 20, paddingBottom: 100 },
-  header: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 20 },
+  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 20 },
   backBtn: { padding: 8, borderRadius: 16 },
-  title: { fontSize: 18, fontWeight: "700", letterSpacing: -0.3 },
+  title: { fontSize: 18, fontWeight: "700", letterSpacing: -0.3, flex: 1, marginLeft: 8 },
+  wcHeaderBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+  },
   searchWrap: {
     flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 16, paddingVertical: 14,
     borderRadius: 16, borderWidth: 1, marginBottom: 16,

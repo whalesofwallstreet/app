@@ -4,6 +4,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useTheme } from "../ThemeContext";
 import { useSecurity } from "../SecurityContext";
+import { useWalletConnect } from "../WalletConnectContext";
 import { currentUser } from "../data/mockData";
 import { shadows } from "../theme";
 
@@ -12,6 +13,7 @@ const thresholdOptions = [0, 50, 100, 250];
 const ProfileScreen = ({ navigation }: any) => {
   const { c, theme, setTheme } = useTheme();
   const { biometricsEnabled, setBiometricsEnabled, biometricThreshold, setBiometricThreshold } = useSecurity();
+  const { isConnected, address, session, connectWallet, disconnectWallet, isConnecting } = useWalletConnect();
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: c.background }]} edges={["top"]}>
@@ -89,6 +91,34 @@ const ProfileScreen = ({ navigation }: any) => {
           </View>
         )}
 
+        {/* WalletConnect Session Card */}
+        <Text style={[styles.sectionHeader, { color: c.mutedForeground, marginTop: 24 }]}>WALLETCONNECT (MOBILE SIGNING)</Text>
+        <View style={[styles.darkCard, { backgroundColor: c.card, borderColor: c.border + "50" }, shadows.card]}>
+          <View style={[styles.menuIcon, { backgroundColor: isConnected ? c.success + "1A" : c.primary + "1A" }]}>
+            <Ionicons name="wallet-outline" size={20} color={isConnected ? c.success : c.primary} />
+          </View>
+          <View style={styles.menuInfo}>
+            <Text style={[styles.menuLabel, { color: c.foreground }]}>
+              {isConnected ? session?.peerName || "Wallet Connected" : "Connect Mobile Wallet"}
+            </Text>
+            <Text style={[styles.menuDesc, { color: c.mutedForeground }]}>
+              {isConnected ? `${address?.slice(0, 6)}...${address?.slice(-4)}` : "Sign bridge transactions via deep link"}
+            </Text>
+          </View>
+          <TouchableOpacity
+            onPress={isConnected ? disconnectWallet : connectWallet}
+            disabled={isConnecting}
+            style={[
+              styles.wcBtn,
+              { backgroundColor: isConnected ? c.secondary : c.primary },
+            ]}
+          >
+            <Text style={{ fontSize: 12, fontWeight: "700", color: isConnected ? c.foreground : "#fff" }}>
+              {isConnecting ? "..." : isConnected ? "Disconnect" : "Connect"}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
         {/* Dark Mode */}
         <Text style={[styles.sectionHeader, { color: c.mutedForeground, marginTop: 24 }]}>PREFERENCES</Text>
         <View style={[styles.darkCard, { backgroundColor: c.card, borderColor: c.border + "50" }, shadows.card]}>
@@ -149,6 +179,11 @@ const styles = StyleSheet.create({
   menuInfo: { flex: 1 },
   menuLabel: { fontSize: 14, fontWeight: "600" },
   menuDesc: { fontSize: 12 },
+  wcBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+  },
 });
 
 export default ProfileScreen;
