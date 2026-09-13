@@ -6,6 +6,7 @@ import { contacts } from "../data/mockData";
 import { Ionicons } from "../components/Ionicons";
 import { useWalletBalance } from "../context/BalanceContext";
 import { useWalletTransactions } from "../context/TransactionContext";
+import { RouteGraph } from "../components/RouteGraph";
 
 export const SendScreen = () => {
   const { c } = useTheme();
@@ -266,6 +267,20 @@ export const SendScreen = () => {
                   </div>
                 )}
               </div>
+
+              {/* Visual Routing Path Graph */}
+              <RouteGraph
+                route={{
+                  provider: "CCTP Bridge + Uniswap V3",
+                  path: `Ethereum (USDC) -> CCTP Bridge (50%) -> Uniswap V3 (Swap) -> Stellar (${selectedContact.name})`,
+                  amount_in: parseFloat(amount) || 0,
+                  amount_out: parseFloat(amount) || 0,
+                  estimated_fee_usd: 0.25,
+                  duration_seconds: 12,
+                  price_impact_bps: 8,
+                  slippage_bps: 15,
+                }}
+              />
 
               <button
                 onClick={handleSend}
