@@ -4,13 +4,14 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useTheme } from "../ThemeContext";
 import { useWallet } from "../WalletContext";
+import { shareDeepLink } from "../utils/linking";
 import { shadows } from "../theme";
 
 const TransactionDetailScreen = ({ navigation, route }: any) => {
   const { c } = useTheme();
   const { transactions } = useWallet();
-  const { id } = route.params;
-  const tx = transactions.find((t) => t.id === id);
+  const id = route?.params?.id;
+  const tx = transactions.find((t) => t.id === id) || transactions[0];
   const [showTech, setShowTech] = useState(false);
 
   if (!tx) {
@@ -35,7 +36,10 @@ const TransactionDetailScreen = ({ navigation, route }: any) => {
             </TouchableOpacity>
             <Text style={[styles.title, { color: c.foreground }]}>Transaction Details</Text>
           </View>
-          <TouchableOpacity style={[styles.shareBtn, { borderColor: c.border + "50" }]}>
+          <TouchableOpacity
+            onPress={() => shareDeepLink("transaction", tx.id)}
+            style={[styles.shareBtn, { borderColor: c.border + "50" }]}
+          >
             <Ionicons name="share-outline" size={20} color={c.foreground} />
           </TouchableOpacity>
         </View>

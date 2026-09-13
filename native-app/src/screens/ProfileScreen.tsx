@@ -5,6 +5,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useTheme } from "../ThemeContext";
 import { useSecurity } from "../SecurityContext";
 import { useWalletConnect } from "../WalletConnectContext";
+import { shareDeepLink } from "../utils/linking";
 import { currentUser } from "../data/mockData";
 import { shadows } from "../theme";
 
@@ -35,6 +36,22 @@ const ProfileScreen = ({ navigation }: any) => {
           <Text style={[styles.profileUsername, { color: c.primary }]}>{currentUser.username}</Text>
           <Text style={[styles.profileEmail, { color: c.mutedForeground }]}>{currentUser.email}</Text>
         </View>
+
+        {/* Share Portfolio Deep Link */}
+        <TouchableOpacity
+          onPress={() => shareDeepLink("portfolio", "1234")}
+          activeOpacity={0.8}
+          style={[styles.shareCard, { backgroundColor: c.card, borderColor: c.border + "50" }, shadows.card]}
+        >
+          <View style={[styles.menuIcon, { backgroundColor: c.primary + "1A" }]}>
+            <Ionicons name="share-social-outline" size={20} color={c.primary} />
+          </View>
+          <View style={styles.menuInfo}>
+            <Text style={[styles.menuLabel, { color: c.foreground }]}>Share Portfolio</Text>
+            <Text style={[styles.menuDesc, { color: c.mutedForeground }]}>Generate universal deep link (wow://portfolio/1234)</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={c.mutedForeground} />
+        </TouchableOpacity>
 
         {/* Security & Biometrics Section */}
         <Text style={[styles.sectionHeader, { color: c.mutedForeground }]}>SECURITY & BIOMETRICS</Text>
@@ -155,6 +172,9 @@ const styles = StyleSheet.create({
   profileUsername: { fontSize: 14, fontWeight: "600" },
   profileEmail: { fontSize: 12, marginTop: 2 },
   sectionHeader: { fontSize: 11, fontWeight: "600", letterSpacing: 1.5, marginBottom: 10 },
+  shareCard: {
+    flexDirection: "row", alignItems: "center", gap: 14, borderRadius: 24, padding: 16, marginBottom: 20, borderWidth: 1,
+  },
   darkCard: {
     flexDirection: "row", alignItems: "center", gap: 14, borderRadius: 24, padding: 16, marginBottom: 12, borderWidth: 1,
   },

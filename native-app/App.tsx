@@ -15,6 +15,7 @@ import { ThemeProvider, useTheme } from "./src/ThemeContext";
 import { WalletProvider } from "./src/WalletContext";
 import { SecurityProvider } from "./src/SecurityContext";
 import { WalletConnectProvider } from "./src/WalletConnectContext";
+import { linkingConfig } from "./src/utils/linking";
 
 import HomeScreen from "./src/screens/HomeScreen";
 import SendScreen from "./src/screens/SendScreen";
@@ -109,7 +110,7 @@ function AppNavigator() {
   return (
     <>
       <StatusBar style={theme === "dark" ? "light" : "dark"} />
-      <NavigationContainer>
+      <NavigationContainer linking={linkingConfig}>
         <Stack.Navigator screenOptions={{ headerShown: false }}>
           <Stack.Screen name="Tabs" component={HomeTabs} />
           <Stack.Screen name="Deposit" component={DepositScreen} />
