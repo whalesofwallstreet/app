@@ -170,7 +170,11 @@ async fn test_wal_archive_pruning_bounds_disk_usage() {
         }
     }
 
-    assert!(archive_count <= 2, "Archive count should be bounded by max_archives=2, got {}", archive_count);
+    assert!(
+        archive_count <= 2,
+        "Archive count should be bounded by max_archives=2, got {}",
+        archive_count
+    );
 
     // Clean up
     let _ = fs::remove_dir_all(&temp_dir).await;

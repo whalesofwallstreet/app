@@ -171,7 +171,11 @@ impl WalManager {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let archive_filename = format!("wal_{}_{}.archive", timestamp, uuid::Uuid::new_v4().simple());
+        let archive_filename = format!(
+            "wal_{}_{}.archive",
+            timestamp,
+            uuid::Uuid::new_v4().simple()
+        );
         let archive_path = self.wal_dir.join(archive_filename);
 
         fs::rename(&active_path, &archive_path).await?;
